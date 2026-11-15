@@ -16,8 +16,8 @@ Không cần card đồ họa, không cần cài cơ sở dữ liệu.
 ## 2. Cài và chạy lần đầu
 
 ```powershell
-git clone https://github.com/buiquyanh9-ai/System-Self-Service-Business-Analytics-tich-hop-AI-Agent-va-Text-to-SQL.git
-cd System-Self-Service-Business-Analytics-tich-hop-AI-Agent-va-Text-to-SQL
+git clone https://github.com/buiquyanh9-ai/Self-service-analytics-agent.git
+cd Self-service-analytics-agent
 
 python -m venv .venv                 # môi trường riêng cho dự án
 .\.venv\Scripts\Activate.ps1
