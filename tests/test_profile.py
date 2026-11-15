@@ -40,7 +40,7 @@ def test_agent_answers_intro_without_calling_llm(monkeypatch):
         raise AssertionError("Không được gọi LLM cho câu hỏi giới thiệu")
     monkeypatch.setattr(llm, "get_client", boom)
     user = UserCtx("analyst", "analyst", {})
-    for mode in ("offline", "openrouter"):
+    for mode in (None, "openrouter"):
         cid = get_store().create_conversation("analyst", "t")
         r = get_agent().ask(user, cid, "Bạn là gì và hỗ trợ được gì?", mode=mode)
         assert r["intent"] == "help" and r["type"] == "info" and not r["error"]

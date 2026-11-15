@@ -10,7 +10,7 @@ from app.store import get_store
 ADMIN = UserCtx("admin", "admin", {})
 
 
-def ask(question, mode="offline", follow=None):
+def ask(question, mode=None, follow=None):
     store = get_store()
     cid = store.create_conversation("admin", "test")
     try:
@@ -69,8 +69,9 @@ def test_sql_page_example_is_compiled_from_metrics_when_profile_has_none(monkeyp
 
 
 def test_unknown_question_gets_plain_guidance_without_jargon():
+    # câu ngoài lề được từ chối lịch sự, nêu đúng chủ đề, kèm câu hỏi gợi ý (không còn trả lời cứng "chưa hiểu")
     r = ask("Thời tiết Hà Nội hôm nay thế nào?")
-    assert r["type"] == "info" and "chưa hiểu" in r["text"] and r["suggestions"]
+    assert r["type"] == "info" and "thời tiết" in r["text"] and "ngoài phạm vi" in r["text"] and r["suggestions"]
     assert "semantic layer" not in r["text"] and "LLM" not in r["text"]
 
 
@@ -104,15 +105,16 @@ def test_follow_ups_skip_what_is_already_in_the_question():
     assert "follow_ups" not in ask("Doanh thu tháng trước là bao nhiêu?")                 # câu hỏi lại thì không gợi ý
 
 
-# ------------------------------------------------------------------ báo rõ khi bộ luật trả lời thay LLM
-def test_answer_says_when_rules_answered_instead_of_the_model(monkeypatch):
+# ------------------------------------------------------------------ không còn chế độ offline: LLM lỗi thì báo lỗi rõ ràng
+def test_llm_failure_is_reported_instead_of_guessing_with_rules(monkeypatch):
     class Broken:
         model, effort, usage = "x/y", "", {"calls": 0}
 
-        def plan(self, *a, **k):
+        def route(self, *a, **k):
             raise llm.LLMError("hết lượt gọi")
 
-    monkeypatch.setattr(llm, "get_client", lambda settings, mode: Broken())
-    r = ask("Doanh thu thuần theo miền tháng 9/2026", mode="openrouter")
-    assert r["type"] == "result" and r["mode"] == "offline" and "hết lượt gọi" in r["fallback"]
-    assert ask("Doanh thu thuần theo miền tháng 9/2026")["fallback"] is None
+    monkeypatch.setattr(llm, "get_client", lambda settings, mode, role="main": Broken())
+    r = ask("Doanh thu thuần theo độ tuổi khách hàng năm 2025")       # bộ luật chỉ hiểu một phần -> cần LLM
+    assert r["type"] == "error" and not r.get("rows") and "hết lượt gọi" in r["llm_error"]
+    fast = ask("Doanh thu thuần theo miền tháng 9/2026")              # bộ luật hiểu trọn vẹn -> đường nhanh, không cần LLM
+    assert fast["type"] == "result" and fast["path"] == "fast"

@@ -47,16 +47,16 @@ def recompute(recipe: dict, columns: list, rows: list):
         return None
     if op == "label":
         return rows[recipe["row"]][_col(columns, recipe["col"])]
+    if op == "count":                   # đếm dòng: không cần (và không được) ép giá trị của cột thành số
+        return float(len(rows))
     ci = _col(columns, recipe["col"])
-    vals = [_num(r[ci]) for r in rows if r[ci] is not None]
     if op == "cell":
         return _num(rows[recipe["row"]][ci])
+    vals = [_num(r[ci]) for r in rows if r[ci] is not None]
     if op == "sum":
         return sum(vals)
     if op == "mean":
         return sum(vals) / len(vals) if vals else None
-    if op == "count":
-        return float(len(rows))
     if op == "share":
         tot = sum(vals)
         return _num(rows[recipe["row"]][ci]) * 100.0 / tot if tot else None
@@ -94,7 +94,19 @@ def explain(columns_meta: list[dict], columns: list, rows: list, plan: dict | No
     meta = {m["name"]: m for m in columns_meta} if columns_meta else {}
     dims = [c for c in columns if meta.get(c, {}).get("kind") == "dimension"]
     mets = [c for c in columns if meta.get(c, {}).get("kind") == "metric" or (c not in dims and c not in meta)]
-    period_raw = (plan.get("time_range") or {}).get("label")
+    # phạm vi = bộ lọc + kỳ: "Doanh thu thuần Miền Nam T10/2026", không để người đọc tưởng là số toàn công ty
+    scope = []
+    for flt in plan.get("filters") or []:
+        vals = [str(v) for v in flt.get("values") or []]
+        if not vals or flt.get("dimension") in columns:
+            continue
+        txt = ", ".join(vals[:3]) + ("…" if len(vals) > 3 else "")
+        if flt.get("op") == "not_in":
+            scope.append(f"trừ {txt}")
+        elif flt.get("op") in (None, "in", "eq", "like"):
+            scope.append(txt)
+    tr_label = (plan.get("time_range") or {}).get("label")
+    period_raw = " ".join(scope + ([tr_label] if tr_label else [])) or None
     sents: list[str] = []
     period = fs.add("period", period_raw, period_raw, {"op": "context"}, "context") if period_raw else None
     highlights = []
@@ -165,10 +177,17 @@ def explain(columns_meta: list[dict], columns: list, rows: list, plan: dict | No
                     sents.append(f"Giảm mạnh nhất: {ld} ({vd}{extra}).")
                     highlights.append({"row": dn, "type": "down"})
     elif not dims:
-        for c in mets[:4]:
-            v = _num(rows[0][_col(columns, c)])
-            t = fs.add(f"kpi_{c}", v, _fmt(v, mfmt(c)), {"op": "cell", "row": 0, "col": c})
-            sents.append(f"{mlabel(c)}{' ' + period if period else ''}: {t}.")
+        # chỉ số người dùng hỏi đứng đầu; cột phụ (thành phần của tỷ số do semantic layer thêm vào, vd doanh thu và số đơn
+        # của "giá trị đơn trung bình") chỉ là phần giải thích phía sau, không được chiếm câu trả lời
+        asked = [c for c in plan.get("metrics") or [] if c in mets] or mets[:4]
+        extra = [c for c in mets if c not in asked]
+        kpi = lambda c: fs.add(f"kpi_{c}", _num(rows[0][_col(columns, c)]), _fmt(_num(rows[0][_col(columns, c)]), mfmt(c)),
+                               {"op": "cell", "row": 0, "col": c})
+        for c in asked[:4]:
+            sents.append(f"{mlabel(c)}{' ' + period if period else ''}: {kpi(c)}.")
+        if extra and len(asked) < 4:
+            parts = [f"{mlabel(c).lower()} {kpi(c)}" for c in extra[:4 - len(asked)]]
+            sents.append(("Thành phần: " if len(asked) == 1 else "Kèm theo: ") + "; ".join(parts) + ".")
     else:
         time_first = meta.get(dims[0], {}).get("time")
         m0 = next((m for m in (plan.get("metrics") or []) if m in mets), mets[0] if mets else None)
@@ -216,17 +235,30 @@ def explain(columns_meta: list[dict], columns: list, rows: list, plan: dict | No
             else:
                 v = _num(rows[valid[0]][ci]) if valid else None
                 t = fs.add("only", v, _fmt(v, f), {"op": "cell", "row": valid[0] if valid else 0, "col": m0})
-                sents.append(f"{mlabel(m0)} {rows[0][0]}: {t}.")
+                ob = (plan.get("order_by") or [{}])[0] or {}
+                if ob.get("direction"):     # "tháng nào doanh thu thấp nhất" -> nói rõ đây là kỳ cao/thấp nhất
+                    word = "thấp nhất" if str(ob["direction"]).lower().startswith("asc") else "cao nhất"
+                    dl = meta.get(d0, {}).get("label", d0)
+                    sents.append(f"{dl} có {mlabel(m0).lower()} {word}{' ' + period if period else ''}: {rows[0][0]} ({t}).")
+                else:
+                    sents.append(f"{mlabel(m0)} {rows[0][0]}: {t}.")
         else:
             d0 = dims[-1] if time_first else dims[0]
             n = len(rows)
-            order = sorted([i for i, r in enumerate(rows) if r[ci] is not None], key=lambda i: -rows[i][ci])
+            # câu hỏi "thấp nhất" (sắp tăng dần): nói "thấp nhất là ..." thay vì "dẫn đầu là ..."
+            asc = str(((plan.get("order_by") or [{}])[0] or {}).get("direction", "")).lower().startswith("asc")
+            order = sorted([i for i, r in enumerate(rows) if r[ci] is not None], key=lambda i: rows[i][ci] if asc else -rows[i][ci])
             if order:
                 top = order[0]
                 dl = meta.get(d0, {}).get("label", d0).lower()
                 lt = fs.add("top_label", rows[top][_col(columns, d0)], _label_row(rows[top], columns, dims), {"op": "label", "row": top, "col": d0}, "label")
                 vt = fs.add("top", _num(rows[top][ci]), _fmt(rows[top][ci], f), {"op": "cell", "row": top, "col": m0})
-                s = f"Dẫn đầu là {lt} với {mlabel(m0).lower()} {vt}"
+                # kèm phạm vi (bộ lọc + kỳ): "... 89,48 tỷ ₫ (Hà Nội T10/2026)", không để người đọc tưởng là toàn bộ dữ liệu
+                ranking = bool((plan or {}).get("limit") or (plan or {}).get("order_by"))
+                if n == 1 and not ranking:      # một dòng do phân quyền / bộ lọc, không phải câu xếp hạng: không nói "dẫn đầu"
+                    s = f"{mlabel(m0)} của {lt}: {vt}" + (f" ({period})" if period else "")
+                else:
+                    s = f"{'Thấp nhất là' if asc else 'Dẫn đầu là'} {lt} với {mlabel(m0).lower()} {vt}" + (f" ({period})" if period else "")
                 if additive and len(dims) == 1 and n > 1 and all(rows[i][ci] >= 0 for i in order):
                     sh = fs.add("top_share", recompute({"op": "share", "row": top, "col": m0}, columns, rows), "",
                                 {"op": "share", "row": top, "col": m0})
@@ -235,7 +267,7 @@ def explain(columns_meta: list[dict], columns: list, rows: list, plan: dict | No
                     scope = f"tổng của top {tn} {dl}" if plan.get("limit") else f"tổng của {tn} {dl}"
                     s += f", chiếm {sh} {scope}"
                 sents.append(s + ".")
-                highlights.append({"row": top, "type": "up"})
+                highlights.append({"row": top, "type": "down" if asc else "up"})
                 if n >= 3:
                     second = order[1]
                     l2 = fs.add("second_label", rows[second][_col(columns, d0)], _label_row(rows[second], columns, dims), {"op": "label", "row": second, "col": d0}, "label")
@@ -245,8 +277,8 @@ def explain(columns_meta: list[dict], columns: list, rows: list, plan: dict | No
                     bot = order[-1]
                     lb = fs.add("bottom_label", rows[bot][_col(columns, d0)], _label_row(rows[bot], columns, dims), {"op": "label", "row": bot, "col": d0}, "label")
                     vb = fs.add("bottom", _num(rows[bot][ci]), _fmt(rows[bot][ci], f), {"op": "cell", "row": bot, "col": m0})
-                    sents.append(f"Thấp nhất: {lb} ({vb}).")
-                    highlights.append({"row": bot, "type": "down"})
+                    sents.append(f"{'Cao nhất' if asc else 'Thấp nhất'}: {lb} ({vb}).")
+                    highlights.append({"row": bot, "type": "up" if asc else "down"})
                 if additive and len(dims) == 1 and n >= 6 and not plan.get("limit"):
                     s3 = fs.add("top3_share", recompute({"op": "share_topk", "k": 3, "col": m0}, columns, rows), "",
                                 {"op": "share_topk", "k": 3, "col": m0, "sorted": True})

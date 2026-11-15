@@ -6,6 +6,10 @@ Agent phân tích biến động ("Vì sao doanh thu tháng 9 giảm?"):
   4. Phân rã sản lượng × giá trị (số đơn vs giá trị đơn trung bình)
   5. Kiểm tra nguyên nhân gốc XÁC ĐỊNH: trôi lệch đơn vị giá (KS test), cửa hàng đóng cửa, hết hàng (tồn kho),
      lịch khuyến mãi, dữ liệu kỳ chưa đầy đủ
+  6. Giả thuyết do mô hình ngôn ngữ đề xuất, code kiểm chứng: mô hình đọc bức tranh phân rã và nêu tối đa 4 giả
+     thuyết dạng "chỉ số X ở phân khúc Y (1–2 chiều) giảm/tăng". Code chạy truy vấn cho từng giả thuyết và chấm:
+     xác nhận / yếu / bác bỏ / không kiểm được. Lời giải thích chỉ nhắc giả thuyết được xác nhận, bằng số do code
+     tính; mô hình không bao giờ đưa số vào câu trả lời. Lượt gọi mô hình chạy song song với bước 4–5.
 Mọi truy vấn đều đi qua governance (RBAC/RLS/chi phí) như truy vấn thường. Mọi con số trong lời giải thích
 được lấy từ kết quả truy vấn và kiểm chứng lại (audit).
 """
@@ -15,13 +19,20 @@ import datetime as dt
 import math
 import re
 import statistics
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from . import profile
 from .catalog import get_catalog
 from .semantic import get_semantic, q as sqlq
-from .textutil import fmt_money, fmt_number, fmt_pct, fmt_value
+from .textutil import fmt_money, fmt_number, fmt_pct, fmt_value, norm
 
 MAX_AUTO_DRIVERS, MAX_DRIVER_VALUES = 6, 60
+MAX_HYP, MAX_SEG_DIMS, MAX_LISTED_VALUES = 3, 2, 45
+HYP_MIN_TIME_S = 5.0         # lượt gọi mô hình mất ~5 s: còn ít thời gian hơn thì không gọi (đằng nào cũng không kịp)
+HYP_CONFIRM_SHARE = 0.2       # chỉ số đang phân tích: phân khúc giải thích >= 20% biến động mới coi là xác nhận
+HYP_CONFIRM_PCT = 5.0         # chỉ số khác: thay đổi >= 5% đúng chiều mới coi là xác nhận
+HYP_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hyp")
 
 
 def analysis_config(sem, metric: str) -> dict:
@@ -63,7 +74,9 @@ def _pct(a, b):
     return (a - b) * 100.0 / abs(b) if b else None
 
 
-def analyze(plan: dict, run, anchor: dt.date) -> dict:
+def analyze(plan: dict, run, anchor: dt.date, hypothesize=None, deadline: float | None = None) -> dict:
+    """hypothesize: hàm (system, user) -> dict của mô hình ngôn ngữ (None = bỏ bước 6). deadline: mốc time.time() nên
+    xong; quá mốc thì bỏ giả thuyết chưa về thay vì bắt người dùng chờ."""
     sem = get_semantic()
     metric = plan["metrics"][0]
     mdef = sem.metrics[metric]
@@ -193,6 +206,15 @@ def analyze(plan: dict, run, anchor: dt.date) -> dict:
                 ts = [facts.add(f"drill_{i}", n, "label", ("drill", 0, i, "member")) for i, n in enumerate(names)]
                 lines.append(f"Trong {t_m}, biến động tập trung ở {d0['label'].lower()}: {', '.join(ts)}.")
 
+    # 6a. giả thuyết: gửi mô hình ngay khi có bức tranh phân rã, chạy song song với bước 4–5
+    hyp_future, hyp_ctx = None, None
+    if hypothesize and (deadline is None or deadline - time.time() >= HYP_MIN_TIME_S):
+        try:
+            hyp_ctx = _hyp_context(sem, metric, mdef, cur, prev, T, drivers, filters, cfg)
+            hyp_future = HYP_POOL.submit(hypothesize, *hypothesis_prompt(hyp_ctx))
+        except Exception:
+            hyp_future = None
+
     # 4. phân rã số lượng × giá trị trung bình (chỉ số tiền có khai báo chỉ số đếm đi kèm)
     decomposition = None
     dec = cfg["decomposition"]
@@ -235,6 +257,32 @@ def analyze(plan: dict, run, anchor: dt.date) -> dict:
         causes += _check_promotions(run, cur, prev)
     causes += _check_incomplete_period(cur, anchor)
 
+    # 6b. kiểm chứng giả thuyết bằng truy vấn
+    hypotheses = []
+    if hyp_future is not None:
+        wait = max(0.3, (deadline - time.time()) if deadline else 6.0)
+        try:
+            cands = normalize_hypotheses(hyp_future.result(timeout=wait), sem, hyp_ctx)
+        except Exception as e:
+            cands = []
+            hypotheses.append({"claim": "", "status": "error",
+                               "reason": f"Mô hình chưa đưa giả thuyết kịp ({type(e).__name__})."})
+        for hyp in cands:
+            if deadline and time.time() > deadline + 1.5:
+                hyp.update(status="untested", reason="Hết thời gian, chưa kiểm.")
+            else:
+                verify_hypothesis(hyp, runq, filters, cur, prev, T, metric, additive, sem)
+            hypotheses.append(hyp)
+        for i, hh in enumerate([h for h in hypotheses if h.get("status") == "confirmed"][:2]):
+            seg = facts.add(f"hyp{i}_seg", hh["segment_label"], "label", ("hypothesis", i, "segment"))
+            tp = facts.add(f"hyp{i}_pct", hh["pct"] if hh["pct"] is not None else 0.0, "pct_abs", ("hypothesis", i, "pct"))
+            word = "giảm" if hh["delta"] < 0 else "tăng"
+            extra = ""
+            if hh.get("share") is not None:
+                ts = facts.add(f"hyp{i}_share", hh["share"] * 100, "pct_abs", ("hypothesis", i, "share"))
+                extra = f", chiếm {ts} tổng biến động"
+            lines.append(f"Giả thuyết đã kiểm chứng: {sem.metrics[hh['metric']]['label'].lower()} ở {seg} {word} {tp}{extra}.")
+
     dq = [c for c in causes if c["kind"] == "data_quality"]
     biz = [c for c in causes if c["kind"] == "business"]
     if dq:
@@ -264,7 +312,7 @@ def analyze(plan: dict, run, anchor: dt.date) -> dict:
     return {"type": "variance", "metric": metric, "metric_label": mdef["label"], "format": fmt,
             "period_now": cur, "period_prev": prev, "total": T, "significance": sig, "drivers": drivers,
             "best_dimension": best["dimension"] if best else None, "drill": drill, "decomposition": decomposition,
-            "root_causes": causes, "text": text, "facts": facts.items, "audit": audit, "queries": queries, "chart": chart}
+            "root_causes": causes, "hypotheses": hypotheses, "text": text, "facts": facts.items, "audit": audit, "queries": queries, "chart": chart}
 
 
 def _seg_where(filters, sem, alias_map):
@@ -424,3 +472,154 @@ def _check_promotions(run, cur, prev):
                         "short": "; ".join(msg), "message": "Lịch khuyến mãi khác nhau giữa hai kỳ: " + "; ".join(msg) + ".",
                         "evidence": promos})
     return out
+
+
+# ------------------------------------------------------------------ giả thuyết: mô hình đề xuất, code kiểm chứng
+HYP_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["hypotheses"],
+    "properties": {"hypotheses": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["claim", "metric", "segment", "expect"],
+        "properties": {
+            "claim": {"type": "string"},
+            "metric": {"type": "string"},
+            "segment": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                                                   "required": ["dimension", "value"],
+                                                   "properties": {"dimension": {"type": "string"}, "value": {"type": "string"}}}},
+            "expect": {"type": "string", "enum": ["giảm", "tăng"]}}}}}}
+HYP_SHAPE = ('{"hypotheses": [{"claim": "...", "metric": "<tên chỉ số>", '
+             '"segment": [{"dimension": "<tên chiều>", "value": "<giá trị>"}], "expect": "giảm"}]}')
+
+
+def _hyp_metrics(sem, metric: str, cfg: dict) -> list[str]:
+    """Chỉ số được dùng trong giả thuyết: chỉ số đang phân tích, các chỉ số tách số lượng × giá trị, và danh sách
+    analysis.hypothesis_metrics của doanh nghiệp."""
+    dec = cfg.get("decomposition") or {}
+    cands = [metric, dec.get("count"), dec.get("units")] + list((sem.cfg.get("analysis") or {}).get("hypothesis_metrics") or [])
+    out = []
+    for m in cands:
+        if m and m in sem.metrics and m not in out:
+            out.append(m)
+    return out
+
+
+def _hyp_context(sem, metric, mdef, cur, prev, T, drivers, filters, cfg) -> dict:
+    dims = []
+    for d in list(cfg["drivers"]) + [x for v in (cfg["drill"] or {}).values() for x in v]:
+        if d in sem.dims and d not in dims and sem.dims[d].get("kind") != "time":
+            dims.append(d)
+    return {
+        "metric": metric, "metric_label": mdef["label"], "period_now": cur.get("label"), "period_prev": prev.get("label"),
+        "total": T,
+        "filters": [f"{sem.dims[f['dimension']]['label']}: {', '.join(map(str, f.get('values') or []))}"
+                    for f in filters if f.get("dimension") in sem.dims],
+        "drivers": [{"dimension": d["dimension"], "label": d["label"],
+                     "top": [{"member": i["member"], "pct": i["pct"]} for i in d["items"][:4]]} for d in drivers],
+        "metrics": {m: sem.metrics[m]["label"] for m in _hyp_metrics(sem, metric, cfg)},
+        "dims": {d: {"label": sem.dims[d]["label"], "values": [str(v) for v in sem.dim_values(d)[:MAX_LISTED_VALUES]]}
+                 for d in dims},
+    }
+
+
+def hypothesis_prompt(ctx: dict) -> tuple[str, str]:
+    system = (
+        "Bạn là chuyên viên phân tích kinh doanh. Nhiệm vụ: đề xuất GIẢ THUYẾT về nguyên nhân biến động của một chỉ số. "
+        "Mỗi giả thuyết phải kiểm chứng được bằng một truy vấn dạng: chỉ số M ở phân khúc S (1–2 cặp chiều = giá trị) "
+        f"giảm/tăng so với kỳ so sánh. Tối đa {MAX_HYP} giả thuyết. Ưu tiên giả thuyết KHÁC với việc nhắc lại thành phần "
+        "đóng góp lớn nhất đã có: kết hợp hai chiều (ví dụ một kênh trong một miền), hoặc dùng chỉ số khác để giải thích "
+        "cơ chế (số đơn giảm hay giá trị mỗi đơn giảm, chiết khấu tăng, trả hàng tăng...). "
+        "Chỉ dùng tên chỉ số, tên chiều và giá trị có trong danh sách được cho, viết đúng như danh sách. "
+        "claim: một câu tiếng Việt ngắn (dưới 15 từ) nêu giả thuyết và cơ chế, KHÔNG ghi chữ số nào. "
+        "Không có giả thuyết nào hợp lý thì trả danh sách rỗng.")
+    T = ctx["total"]
+
+    def pct(x):
+        return "n/a" if x is None else f"{x:+.1f}%"
+    lines = [f"Chỉ số đang phân tích: {ctx['metric']} ({ctx['metric_label']})",
+             f"Kỳ này: {ctx['period_now']} | kỳ so sánh: {ctx['period_prev']} | thay đổi: {pct(T.get('pct'))}"]
+    if ctx["filters"]:
+        lines.append("Phạm vi đang lọc: " + "; ".join(ctx["filters"]))
+    lines.append("Phân rã đã có (thành phần đóng góp lớn nhất theo từng chiều, % thay đổi của thành phần):")
+    for d in ctx["drivers"]:
+        lines.append(f"- {d['dimension']} ({d['label']}): " + ", ".join(f"{t['member']} {pct(t['pct'])}" for t in d["top"]))
+    lines.append("Chỉ số được dùng: " + "; ".join(f"{k} ({v})" for k, v in ctx["metrics"].items()))
+    lines.append("Chiều và giá trị được dùng:")
+    for k, v in ctx["dims"].items():
+        lines.append(f"- {k} ({v['label']}): " + ", ".join(v["values"]))
+    return system, "\n".join(lines)
+
+
+def normalize_hypotheses(raw, sem, ctx: dict) -> list[dict]:
+    """Chỉ giữ giả thuyết dùng đúng chỉ số / chiều / giá trị được phép (giá trị so khớp không phân biệt hoa thường, dấu)."""
+    items = raw.get("hypotheses") if isinstance(raw, dict) else None
+    out, seen = [], set()
+    for h in items or []:
+        if not isinstance(h, dict) or h.get("metric") not in ctx["metrics"]:
+            continue
+        m = h["metric"]
+        seg, bad = [], False
+        for x in (h.get("segment") or [])[:MAX_SEG_DIMS + 1]:
+            d, v = (x or {}).get("dimension"), str((x or {}).get("value") or "").strip()
+            vals = (ctx["dims"].get(d) or {}).get("values") or []
+            if d in ctx["dims"] and len(vals) >= MAX_LISTED_VALUES:
+                vals = [str(c) for c in sem.dim_values(d)]
+            hit = next((str(c) for c in vals if norm(str(c)) == norm(v)), None)
+            if not hit or d not in sem.dims_for_metric(m) or any(y["dimension"] == d for y in seg):
+                bad = True
+                break
+            seg.append({"dimension": d, "value": hit})
+        if bad or not seg or len(seg) > MAX_SEG_DIMS:
+            continue
+        key = (m, tuple(sorted((y["dimension"], y["value"]) for y in seg)))
+        if key in seen:
+            continue
+        seen.add(key)
+        claim = str(h.get("claim") or "").strip()
+        if re.search(r"\d", claim):        # mô hình tự ghi số: bỏ câu chữ, dùng mô tả do code tạo
+            claim = ""
+        expect = "tăng" if h.get("expect") == "tăng" else "giảm"
+        label = " · ".join(f"{sem.dims[y['dimension']]['label']} {y['value']}" for y in seg)
+        out.append({"claim": claim or f"{sem.metrics[m]['label']} ở {label} {expect}", "metric": m,
+                    "metric_label": sem.metrics[m]["label"], "segment": seg, "segment_label": label, "expect": expect})
+        if len(out) >= MAX_HYP:
+            break
+    return out
+
+
+def verify_hypothesis(h: dict, runq, filters, cur, prev, T, metric, additive, sem) -> dict:
+    """Chạy truy vấn cho phân khúc của giả thuyết và chấm theo số liệu thật."""
+    m = h["metric"]
+    seg_f = [{"dimension": y["dimension"], "op": "in", "values": [y["value"]]} for y in h["segment"]]
+    h["format"] = sem.metrics[m].get("format", "number")
+    try:
+        _, r = runq({"metrics": [m], "dimensions": [], "filters": list(filters) + seg_f, "time_range": cur, "compare": prev},
+                    f"Kiểm chứng giả thuyết: {sem.metrics[m]['label'].lower()} ở {h['segment_label']}")
+        row = dict(zip(r["columns"], r["rows"][0])) if r["rows"] else {}
+        now, before = row.get(f"{m}_ky_nay"), row.get(f"{m}_ky_truoc")
+    except Exception as e:
+        h.update(status="untested", reason=f"Không chạy được truy vấn kiểm chứng: {str(e)[:120]}")
+        return h
+    if now is None and before is None:
+        h.update(status="rejected", reason="Phân khúc này không có dữ liệu ở cả hai kỳ.")
+        return h
+    now, before = now or 0.0, before or 0.0
+    delta, pct = now - before, _pct(now, before)
+    want = -1 if h["expect"] == "giảm" else 1
+    share = None
+    # tỷ lệ "giải thích bao nhiêu % biến động" chỉ có nghĩa khi tổng biến động đáng kể và phân khúc không vượt xa tổng
+    if m == metric and additive and T.get("delta") and abs(T.get("pct") or 0) >= 1.0:
+        share = delta / T["delta"]
+        if not 0 < share <= 1.5:
+            share = None
+    h.update(now=now, prev=before, delta=delta, pct=pct, share=share)
+    if delta * want <= 0:
+        h.update(status="rejected", reason="Số liệu đi ngược chiều giả thuyết (hoặc không đổi).")
+    elif share is not None:
+        ok = share >= HYP_CONFIRM_SHARE
+        h.update(status="confirmed" if ok else "weak",
+                 reason="Phân khúc giải thích phần đáng kể của biến động." if ok
+                 else "Đúng chiều nhưng chỉ giải thích phần nhỏ của biến động.")
+    else:
+        ok = pct is None or abs(pct) >= HYP_CONFIRM_PCT
+        h.update(status="confirmed" if ok else "weak",
+                 reason="Thay đổi đúng chiều và đủ lớn." if ok else "Đúng chiều nhưng thay đổi nhỏ.")
+    return h

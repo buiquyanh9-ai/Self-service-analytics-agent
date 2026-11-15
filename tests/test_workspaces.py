@@ -35,7 +35,7 @@ for key, q in (("by_region", "Số vận đơn theo miền tháng 9/2026"), ("re
                ("volume", "Sản lượng theo miền tháng 10/2026"), ("dest", "Số vận đơn giao tới Miền Trung tháng 6/2026"),
                ("why", "Vì sao số vận đơn tháng 9/2026 giảm so với tháng 8/2026?"), ("who", "bạn là ai?")):
     cid = store.create_conversation("admin", "t")
-    r = agent.ask(admin, cid, q, eval_mode=True, mode="offline")
+    r = agent.ask(admin, cid, q, eval_mode=True)
     store.delete_conversation(cid)
     out[key] = {"type": r["type"], "sql": r.get("sql"), "rows": r.get("rows"), "text": r.get("text"),
                 "options": (r.get("clarification") or {}).get("options"),
@@ -59,16 +59,27 @@ out["starters"] = {}
 for g in summary["starters"]:
     for q in g["questions"]:
         cid = store.create_conversation("admin", "t")
-        out["starters"][q] = agent.ask(admin, cid, q, eval_mode=True, mode="offline")["type"]
+        out["starters"][q] = agent.ask(admin, cid, q, eval_mode=True)["type"]
         store.delete_conversation(cid)
 print("PROBE=" + json.dumps(out, ensure_ascii=False, default=str))
 """
 
 
+# tiến trình con không có fixture của conftest: cài client LLM giả trước khi chạy, không bao giờ gọi mạng
+FAKE_LLM = "\n".join([
+    f"import sys; sys.path.insert(0, {str(ROOT / 'tests')!r})",
+    "from app import llm",
+    "from fake_llm import FakeLLM",
+    "_fake = FakeLLM()",
+    "llm.get_client = lambda settings, mode, role='main': _fake",
+    ""])
+
+
 def _run(workspace: str, code: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ, WORKSPACE=workspace, PYTHONIOENCODING="utf-8",
+    env = dict(os.environ, WORKSPACE=workspace, PYTHONIOENCODING="utf-8", OPENROUTER_API_KEY="test-key", LLM_MODE="openrouter",
                APP_DB=str(pathlib.Path(tempfile.gettempdir()) / f"data01_test_{workspace}.sqlite"))
-    return subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run([sys.executable, "-c", FAKE_LLM + code], cwd=ROOT, env=env, capture_output=True, text=True,
+                          encoding="utf-8")
 
 
 @pytest.fixture(scope="module")

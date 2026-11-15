@@ -66,6 +66,20 @@ dimensions:
   # ---- riêng theo model
   loai_khieu_nai: {label: Loại khiếu nại,  expr: c.complaint_type, synonyms: [loại khiếu nại, lý do khiếu nại, nguyên nhân khiếu nại]}
   loai_chi_phi:   {label: Loại chi phí,    expr: k.cost_type,      synonyms: [loại chi phí, khoản mục chi phí, khoản mục]}
+  # ---- lịch (kho không có bảng ngày: tính từ cột ngày của từng model)
+  thu_trong_tuan:
+    label: Thứ trong tuần
+    expr: "CASE ISODOW(s.created_date) WHEN 1 THEN 'Thứ 2' WHEN 2 THEN 'Thứ 3' WHEN 3 THEN 'Thứ 4' WHEN 4 THEN 'Thứ 5' WHEN 5 THEN 'Thứ 6' WHEN 6 THEN 'Thứ 7' ELSE 'Chủ nhật' END"
+    expr_by_model:
+      khieu_nai: "CASE ISODOW(c.created_date) WHEN 1 THEN 'Thứ 2' WHEN 2 THEN 'Thứ 3' WHEN 3 THEN 'Thứ 4' WHEN 4 THEN 'Thứ 5' WHEN 5 THEN 'Thứ 6' WHEN 6 THEN 'Thứ 7' ELSE 'Chủ nhật' END"
+    synonyms: [thứ trong tuần, ngày trong tuần, ngày nào trong tuần, thứ nào trong tuần, thứ nào, thứ mấy, các thứ]
+  cuoi_tuan:
+    label: Cuối tuần / ngày thường
+    expr: "CASE WHEN ISODOW(s.created_date) >= 6 THEN 'Cuối tuần' ELSE 'Ngày thường' END"
+    expr_by_model: {khieu_nai: "CASE WHEN ISODOW(c.created_date) >= 6 THEN 'Cuối tuần' ELSE 'Ngày thường' END"}
+    synonyms: [cuối tuần, ngày thường, ngày cuối tuần]
+  # ---- từng khách hàng: xếp hạng theo mã (tên khách xem bằng câu tra cứu "thông tin <mã>")
+  khach_hang:     {label: Khách hàng (mã), expr: s.customer_id, exclude_null: true, synonyms: [khách hàng, người gửi]}
 
 metrics:
   so_van_don:
@@ -242,6 +256,13 @@ nlu:
   # "Nhanh", "Tiêu chuẩn", "Khác" là từ thông dụng; giá trị "Bưu cục" của loại bưu cục trùng với chính tên chiều
   # bưu cục; mã trạng thái tiếng Anh không ai gõ trong câu hỏi
   skip_bare_values: [dich_vu, trang_thai, loai_chi_phi, nganh_kh, loai_buu_cuc]
+  # "top 10 khách hàng", "khách hàng nào" -> chia theo từng khách; "đơn của khách hàng ở Hà Nội" -> không
+  marker_only_dims: [khach_hang]
+  default_metric: {loai_khieu_nai: so_khieu_nai, loai_chi_phi: chi_phi_van_hanh}
+  overview:
+    phrases: [tinh hinh kinh doanh, tinh hinh van hanh, ket qua kinh doanh, hieu qua kinh doanh, tong quan, bao cao tong hop,
+              bao cao kinh doanh, bao cao van hanh, bao cao thang, bao cao quy, bao cao tuan, bao cao nam, cac chi so chinh]
+    metrics: [so_van_don, doanh_thu_cuoc, ty_le_giao_thanh_cong, ty_le_dung_han, so_khieu_nai]
   context_remap:           # "giao tới Miền Trung" là miền PHÁT, không phải miền gửi
     - {dimension: mien, to: mien_phat, before_regex: '(giao|phat|gui|chuyen)( hang)? (toi|den|ve|vao|di)\s*$'}
     - {dimension: tinh, to: tinh_phat, before_regex: '(giao|phat|gui|chuyen)( hang)? (toi|den|ve|vao|di)\s*$'}
@@ -270,6 +291,13 @@ nlu:
       Nhân công: [nhan cong, chi phi nhan cong, luong nhan vien]
       Thuê mặt bằng: [thue mat bang, mat bang, chi phi mat bang]
       Nhiên liệu & xe: [nhien lieu, xang xe, chi phi xe]
+  # Tra cứu danh mục (app/lookup.py): "thông tin bưu cục H002", "những bưu cục nào đã đóng cửa", "có bao nhiêu bưu cục"
+  lookups:
+    buu_cuc:    {table: mart.dim_hub, key: hub_id, name: hub_name, label: bưu cục, dimension: buu_cuc,
+                 states: {đóng cửa: "t.closed_date IS NOT NULL", ngừng hoạt động: "t.closed_date IS NOT NULL",
+                          còn hoạt động: "t.closed_date IS NULL", đang hoạt động: "t.closed_date IS NULL"}}
+    dich_vu:    {table: mart.dim_service, key: service_code, name: service_name, label: dịch vụ, dimension: dich_vu}
+    khach_hang: {table: mart.dim_customer, key: customer_id, name: customer_name, label: khách hàng, dimension: khach_hang}
 
 analysis:
   driver_dimensions: [mien, phan_khuc, dich_vu, tuyen, tinh, buu_cuc]
@@ -302,7 +330,7 @@ ambiguities:
       - {label: "Khối lượng hàng (kg)", metric: khoi_luong}
   - id: best_criteria
     pref_key: best_criteria
-    triggers: [tốt nhất, hiệu quả nhất, kém nhất, tệ nhất, nổi bật nhất, dẫn đầu]
+    triggers: [tốt nhất, hiệu quả nhất, kém nhất, tệ nhất, nổi bật nhất, dẫn đầu, yếu nhất, giỏi nhất, kém hiệu quả, gửi nhiều]
     weak_triggers: [top]
     requires_no_metric: true
     question: "Bạn muốn xếp hạng theo tiêu chí nào?"

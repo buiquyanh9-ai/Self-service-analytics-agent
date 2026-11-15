@@ -145,21 +145,21 @@ tables:
     columns:
       ma_cn: {description: "Mã cửa hàng"}
       ten_cn: {description: "Tên cửa hàng"}
-      ma_vung: {description: "Mã vùng"}
+      ma_vung: {description: "Mã vùng -> dw.dim_vung"}
       tinh_tp: {description: "Tỉnh/thành phố"}
-      loai_ch: {description: "Mô hình: Flagship / Tiêu chuẩn / Mini"}
-      dt_m2: {description: "Diện tích (m²)"}
-      ngay_mo: {description: "Ngày khai trương"}
+      loai_ch: {description: "Mô hình cửa hàng: Flagship / Tiêu chuẩn / Mini"}
+      dt_m2: {description: "Diện tích (m²)", synonyms: [diện tích]}
+      ngay_mo: {description: "Ngày khai trương", synonyms: [ngày mở cửa, ngày khai trương, mới mở, mở cửa]}
       ngay_dong: {description: "Ngày đóng cửa (NULL nếu đang hoạt động)"}
-      ma_kho: {description: "Kho cấp hàng"}
-      trang_thai: {description: "Đang hoạt động / Đã đóng cửa"}
+      ma_kho: {description: "Kho cấp hàng -> dw.dim_kho"}
+      trang_thai: {description: "Trạng thái: Đang hoạt động / Đã đóng cửa"}
   dw.dim_kho:
     description: "Kho / trung tâm phân phối."
     synonyms: [kho, dc, warehouse]
     columns:
       ma_kho: {description: "Mã kho"}
       ten_kho: {description: "Tên kho"}
-      ma_vung: {description: "Mã vùng"}
+      ma_vung: {description: "Mã vùng -> dw.dim_vung"}
       tinh_tp: {description: "Tỉnh/thành"}
   dw.dim_kenh:
     description: "Kênh bán hàng."
@@ -183,11 +183,11 @@ tables:
       ma_nh: {description: "Mã ngành hàng -> dw.dim_nh"}
       nhom_sp: {description: "Nhóm sản phẩm"}
       thuong_hieu: {description: "Thương hiệu"}
-      gia_von: {description: "Giá vốn (VND)"}
-      gia_niem_yet: {description: "Giá bán lẻ niêm yết (VND)"}
-      ngay_ra_mat: {description: "Ngày ra mắt / mở bán"}
-      ma_ncc: {description: "Nhà cung cấp chính"}
-      trang_thai_kd: {description: "Đang KD / Ngừng KD"}
+      gia_von: {description: "Giá vốn (VND)", synonyms: [giá vốn, giá nhập]}
+      gia_niem_yet: {description: "Giá bán lẻ niêm yết (VND)", synonyms: [giá niêm yết, giá bán lẻ, giá bán]}
+      ngay_ra_mat: {description: "Ngày ra mắt / mở bán", synonyms: [ngày ra mắt, mới ra mắt, ra mắt]}
+      ma_ncc: {description: "Nhà cung cấp chính -> dw.dim_ncc"}
+      trang_thai_kd: {description: "Trạng thái kinh doanh: Đang KD / Ngừng KD"}
   dw.dim_ncc:
     description: "Nhà cung cấp."
     synonyms: [nhà cung cấp, supplier]
@@ -210,26 +210,26 @@ tables:
     synonyms: [khách hàng, customer, thành viên]
     columns:
       ma_kh: {description: "Mã khách hàng"}
-      ho_ten: {description: "Họ tên khách hàng", sensitivity: pii}
+      ho_ten: {description: "Họ tên khách hàng", sensitivity: pii, synonyms: [họ tên, họ và tên, tên khách hàng]}
       gt: {description: "Giới tính: Nam / Nữ / Không rõ"}
       nam_sinh: {description: "Năm sinh"}
       tinh_tp: {description: "Tỉnh/thành nơi ở (đã chuẩn hóa)"}
-      ma_vung: {description: "Vùng nơi ở"}
+      ma_vung: {description: "Vùng nơi ở -> dw.dim_vung"}
       hang_tv: {description: "Hạng thành viên: Thường / Bạc / Vàng / Kim cương"}
       ngay_dk: {description: "Ngày đăng ký thành viên"}
-      sdt: {description: "Số điện thoại", sensitivity: pii}
-      email: {description: "Email", sensitivity: pii}
+      sdt: {description: "Số điện thoại", sensitivity: pii, synonyms: [số điện thoại, sđt, điện thoại liên hệ]}
+      email: {description: "Email", sensitivity: pii, synonyms: [email, địa chỉ email]}
   dw.dim_nv:
     description: "Nhân viên cửa hàng (HR). Lương là dữ liệu mật."
     synonyms: [nhân viên, nhân sự, staff]
     columns:
       ma_nv: {description: "Mã nhân viên"}
-      ho_ten: {description: "Họ tên nhân viên", sensitivity: pii}
-      ma_cn: {description: "Cửa hàng làm việc"}
+      ho_ten: {description: "Họ tên nhân viên", sensitivity: pii, synonyms: [tên nhân viên, họ tên nhân viên]}
+      ma_cn: {description: "Cửa hàng làm việc -> dw.dim_cn"}
       chuc_vu: {description: "Chức vụ"}
       ngay_vao: {description: "Ngày vào làm"}
       gt: {description: "Giới tính"}
-      luong_cb: {description: "Lương cơ bản (VND/tháng)", sensitivity: confidential}
+      luong_cb: {description: "Lương cơ bản (VND/tháng)", sensitivity: confidential, synonyms: [lương cơ bản, mức lương, tiền lương, lương nhân viên, lương trung bình, bảng lương]}
   stg.stg_don_hang:
     description: "[Staging] Đơn hàng hợp nhất POS + E-commerce, đã chuẩn hóa trạng thái."
   stg.stg_ct_don_hang:

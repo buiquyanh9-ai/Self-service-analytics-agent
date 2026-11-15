@@ -23,6 +23,9 @@ models:
       kenh: {table: dw.dim_kenh, on: "f.ma_kenh = kenh.ma_kenh"}
       kh:   {table: dw.dim_kh,   on: "f.ma_kh = kh.ma_kh", type: LEFT}
       km:   {table: dw.dim_km,   on: "f.ma_km = km.ma_km", type: LEFT}
+      # nhân viên bán chỉ ghi ở cấp đơn: nhóm dòng đơn theo nhân viên của đơn (chỉ lấy cột của fct_dh để nhóm, không cộng)
+      dh:   {table: dw.fct_dh,   on: "f.ma_dh = dh.ma_dh"}
+      dn:   {table: dw.dim_ngay, on: "f.ngay_dh = dn.ngay"}
 
   don_hang:
     label: Đơn hàng (cấp đơn)
@@ -37,6 +40,7 @@ models:
       kenh: {table: dw.dim_kenh, on: "d.ma_kenh = kenh.ma_kenh"}
       kh:   {table: dw.dim_kh,   on: "d.ma_kh = kh.ma_kh", type: LEFT}
       km:   {table: dw.dim_km,   on: "d.ma_km = km.ma_km", type: LEFT}
+      dn:   {table: dw.dim_ngay, on: "d.ngay_dh = dn.ngay"}
 
   tra_hang:
     label: Trả hàng
@@ -51,6 +55,7 @@ models:
       cn:   {table: dw.dim_cn,   on: "r.ma_cn = cn.ma_cn", type: LEFT}
       vung: {table: dw.dim_vung, on: "cn.ma_vung = vung.ma_vung", requires: [cn], type: LEFT}
       kenh: {table: dw.dim_kenh, on: "r.ma_kenh = kenh.ma_kenh", type: LEFT}
+      dn:   {table: dw.dim_ngay, on: "r.ngay_tra = dn.ngay"}
 
   ton_kho:
     label: Tồn kho (ảnh chụp cuối tuần)
@@ -80,6 +85,7 @@ models:
       kho:  {table: dw.dim_kho,  on: "n.ma_kho = kho.ma_kho"}
       vung: {table: dw.dim_vung, on: "kho.ma_vung = vung.ma_vung", requires: [kho]}
       ncc:  {table: dw.dim_ncc,  on: "n.ma_ncc = ncc.ma_ncc"}
+      dn:   {table: dw.dim_ngay, on: "n.ngay_nk = dn.ngay"}
 
   ke_hoach:
     label: Kế hoạch doanh thu
@@ -132,6 +138,18 @@ dimensions:
   pttt:        {label: Phương thức thanh toán, expr: d.pttt, expr_by_model: {ban_hang: f.pttt}, synonyms: [phương thức thanh toán, hình thức thanh toán, thanh toán bằng]}
   trang_thai:  {label: Trạng thái đơn,    expr: d.trang_thai, expr_by_model: {ban_hang: f.trang_thai}, synonyms: [trạng thái đơn, tình trạng đơn]}
   ly_do_tra:   {label: Lý do trả hàng,    expr: r.ly_do, synonyms: [lý do trả, lý do trả hàng, nguyên nhân trả hàng]}
+  trang_thai_kd: {label: Trạng thái kinh doanh SP, expr: sp.trang_thai_kd, synonyms: [trạng thái kinh doanh, tình trạng kinh doanh]}
+  # ---- lịch (bảng dim_ngay)
+  thu_trong_tuan: {label: Thứ trong tuần, expr: dn.ten_thu,
+                   synonyms: [thứ trong tuần, ngày trong tuần, ngày nào trong tuần, thứ nào trong tuần, thứ nào, thứ mấy, các thứ]}
+  cuoi_tuan:   {label: Cuối tuần / ngày thường, expr: "CASE WHEN dn.cuoi_tuan THEN 'Cuối tuần' ELSE 'Ngày thường' END",
+                synonyms: [cuối tuần, ngày thường, ngày cuối tuần]}
+  # ---- từng người: xếp hạng theo mã (họ tên là dữ liệu cá nhân, xem bằng câu tra cứu "thông tin <mã>").
+  # exclude_null: bỏ dòng không có mã (khách vãng lai, đơn online không có nhân viên bán).
+  khach_hang:  {label: Khách hàng (mã), expr: f.ma_kh, expr_by_model: {don_hang: d.ma_kh}, exclude_null: true,
+                synonyms: [khách hàng, người mua]}
+  nhan_vien:   {label: Nhân viên bán (mã), expr: dh.ma_nv, expr_by_model: {don_hang: d.ma_nv}, exclude_null: true,
+                synonyms: [nhân viên, nhân viên bán hàng, người bán, nhân viên kinh doanh]}
 
 metrics:
   doanh_thu_gop:
@@ -178,7 +196,7 @@ metrics:
     format: number
     owner: Phòng Marketing
     description: "Số khách hàng định danh (có mã KH) có ít nhất 1 đơn hoàn thành. Khách vãng lai không được tính."
-    synonyms: [số khách hàng, số khách, khách hàng mua, lượng khách, bao nhiêu khách]
+    synonyms: [số khách hàng, số khách, lượng khách, bao nhiêu khách, số người mua]
   gia_tri_don_tb:
     label: Giá trị đơn trung bình
     type: derived
@@ -363,8 +381,38 @@ nlu:
     so_luong_ban: [ban duoc bao nhieu cai, ban duoc bao nhieu chiec, ban duoc bao nhieu may, bao nhieu san pham, so luong, ban ra bao nhieu]
     doanh_thu_gop: [doanh so ban hang]
     gia_tri_ton_kho: [gia tri hang ton]
+    so_phieu_tra: [tra hang, bi tra, tra lai, bi tra lai, hoan tra, doi tra, bi doi tra, bi hoan]
   dim_phrases:
     thuong_hieu: [hang san xuat, nhan hieu, cac hang, theo hang]
+  # chiều chỉ dùng để nhóm khi câu hỏi có dấu hiệu xếp hạng/liệt kê ("top 10 khách hàng", "nhân viên nào", "từng khách
+  # hàng"); câu "doanh thu từ khách hàng ở Hà Nội" thì "khách hàng" chỉ là ngữ cảnh, không chia theo từng người
+  marker_only_dims: [khach_hang, nhan_vien]
+  # câu không nêu chỉ số nhưng nhắc chiều chỉ có ở một loại dữ liệu: dùng chỉ số mặc định ("lý do trả hàng phổ biến nhất")
+  default_metric: {ly_do_tra: so_phieu_tra}
+  # cụm từ mang sẵn điều kiện lọc trên chỉ số (HAVING); cụm đầu tiên khớp trong mỗi nhóm `group` được dùng
+  having_phrases:
+    - {group: ke_hoach, phrases: [chua dat ke hoach, khong dat ke hoach, khong dat chi tieu, chua dat chi tieu, hut ke hoach,
+                                  duoi ke hoach, khong hoan thanh ke hoach, chua hoan thanh ke hoach], metric: ty_le_dat_kh, op: "<", value: 100}
+    - {group: ke_hoach, phrases: [vuot ke hoach, vuot chi tieu, da dat ke hoach, nao dat ke hoach, dat va vuot ke hoach],
+       metric: ty_le_dat_kh, op: ">=", value: 100}
+    - {group: ton, phrases: [het hang, khong con ton, khong con hang, ton bang 0], metric: ton_kho_sl, op: "<=", value: 0}
+    - {group: ton, phrases: [con ton, van con ton, con hang ton, con hang trong kho, chua ban het], metric: ton_kho_sl, op: ">", value: 0}
+  # "tình hình kinh doanh tháng 10", "báo cáo tháng này": câu không nêu chỉ số -> bộ chỉ số tổng quan
+  overview:
+    phrases: [tinh hinh kinh doanh, tinh hinh ban hang, ket qua kinh doanh, ket qua ban hang, hieu qua kinh doanh, tong quan,
+              bao cao tong hop, bao cao kinh doanh, bao cao ban hang, bao cao thang, bao cao quy, bao cao tuan, bao cao nam,
+              kinh doanh the nao, kinh doanh ra sao, ban hang the nao, ban hang ra sao, cac chi so chinh]
+    metrics: [doanh_thu_thuan, so_don, gia_tri_don_tb, loi_nhuan_gop, bien_ln_gop]
+  # câu xin lời khuyên ("có nên nhập thêm hàng Samsung không"): trợ lý không quyết định thay người dùng, mà đưa số liệu
+  # liên quan để tự cân nhắc. last_months: số tháng gần nhất khi câu hỏi không nêu thời gian.
+  decision_support:
+    - id: nhap_hang
+      phrases: [nhap them, dat them, nhap hang, dat hang them, bo sung hang, nhap bo sung, co nen nhap, nen nhap, nen dat]
+      metrics: [so_luong_ban, ton_kho_sl, hang_dang_ve]
+      dimensions: [nganh_hang]
+      last_months: 3
+      note: "Mình không quyết định thay bạn, nhưng đây là số liệu để cân nhắc: số lượng bán {period}, tồn kho tại ngày chốt
+             gần nhất và hàng đang về. Tồn kho cao so với sức bán thì chưa cần nhập thêm."
   value_forms:             # biến thể của tên giá trị: bỏ tiền tố (strip), thêm tiền tố (prefixes), có nhận tên trần không (bare)
     chi_nhanh: {strip: ["ABC "], prefixes: [cua hang, chi nhanh, abc], bare: true}
     kho: {strip: ["Kho tổng ", "Kho "], prefixes: [kho, kho tong], bare: false}
@@ -376,6 +424,21 @@ nlu:
     san_pham: {short_regex: '\s+\d+GB$|\s+\(.*\)$'}
   context_remap:           # cùng một giá trị nhưng ngữ cảnh đứng trước đổi chiều
     - {dimension: tinh_tp, to: tinh_kh, before_regex: 'khach( hang)?( o| tai| song o| den tu)?\s*$'}
+  # Tra cứu danh mục (app/lookup.py): "thông tin về SP0010", "những cửa hàng nào đã đóng cửa", "có bao nhiêu kho".
+  # table/key/name: bảng danh mục, cột mã, cột tên. dimension: chiều phân tích của cùng đối tượng, để mã dùng được làm bộ
+  # lọc chỉ số ("doanh thu thuần của CH036"). states: cụm từ -> điều kiện SQL trên bí danh t; giá trị của cột phân loại
+  # ít giá trị (trạng thái, chức vụ) được nhận tự động. Cột PII/mật và RLS vẫn do policies.yml quyết định.
+  lookups:
+    san_pham:   {table: dw.dim_sp,  key: ma_sp,  name: ten_sp,  label: sản phẩm, dimension: san_pham,
+                 states: {đang kinh doanh: "t.trang_thai_kd = 'Đang KD'", còn kinh doanh: "t.trang_thai_kd = 'Đang KD'",
+                          ngừng kinh doanh: "t.trang_thai_kd = 'Ngừng KD'", không còn kinh doanh: "t.trang_thai_kd = 'Ngừng KD'"}}
+    chi_nhanh:  {table: dw.dim_cn,  key: ma_cn,  name: ten_cn,  label: cửa hàng, dimension: chi_nhanh,
+                 states: {đóng cửa: "t.ngay_dong IS NOT NULL", còn hoạt động: "t.ngay_dong IS NULL"}}
+    kho:        {table: dw.dim_kho, key: ma_kho, name: ten_kho, label: kho, dimension: kho}
+    ncc:        {table: dw.dim_ncc, key: ma_ncc, name: ten_ncc, label: nhà cung cấp, dimension: ncc}
+    khuyen_mai: {table: dw.dim_km,  key: ma_km,  name: ten_km,  label: chương trình khuyến mãi, dimension: khuyen_mai}
+    khach_hang: {table: dw.dim_kh,  key: ma_kh,  name: ho_ten,  label: khách hàng, dimension: khach_hang}
+    nhan_vien:  {table: dw.dim_nv,  key: ma_nv,  name: ho_ten,  label: nhân viên, dimension: nhan_vien}
   value_aliases:
     vung:
       Miền Bắc: [mien bac, phia bac, ngoai bac, khu vuc phia bac, khu vuc mien bac]
@@ -418,6 +481,9 @@ nlu:
       Flagship: [flagship, cua hang flagship]
       Mini: [cua hang mini, mini]
       Tiêu chuẩn: [cua hang tieu chuan]
+    trang_thai_kd:
+      Ngừng KD: [ngung kinh doanh, ngung ban, khong con kinh doanh, da ngung, ngung kd]
+      Đang KD: [dang kinh doanh, con kinh doanh, dang ban, dang kd]
 
 # Phân tích biến động ("vì sao ... tăng/giảm"): chiều nào đem ra phân rã, đào sâu tiếp theo chiều nào,
 # và chỉ số tiền nào tách được thành "số lượng × giá trị trung bình". Bỏ cả mục này thì hệ thống tự chọn
@@ -435,6 +501,8 @@ analysis:
   decomposition:
     doanh_thu_thuan: &tach_don {count: so_don, units: so_luong_ban, count_label: số đơn, value_label: giá trị đơn trung bình, count_driver_label: số lượng đơn}
     doanh_thu_gop: *tach_don
+  # chỉ số mô hình được dùng khi nêu giả thuyết nguyên nhân (ngoài chỉ số đang phân tích và các chỉ số tách ở trên)
+  hypothesis_metrics: [gia_tri_don_tb, so_khach_hang, tong_chiet_khau, ty_le_tra_hang, ty_le_huy]
 
 # Thuật ngữ mơ hồ -> agent phải hỏi lại (trừ khi người dùng đã chọn trước trong hội thoại)
 #   triggers:       cụm từ mơ hồ. Loại thường: hỏi lại khi cụm từ xuất hiện ngoài mọi tên chỉ số.
@@ -449,11 +517,15 @@ ambiguities:
     unless_any: [gộp, thuần, net, gmv, doanh số, trước chiết khấu, sau chiết khấu, kế toán, thực]
     question: "“Doanh thu” đang được các phòng ban định nghĩa khác nhau. Bạn muốn dùng định nghĩa nào?"
     options:
-      - {label: "Doanh thu thuần (Tài chính) — sau chiết khấu, trừ hàng trả, chỉ đơn hoàn thành", metric: doanh_thu_thuan}
-      - {label: "Doanh thu gộp (Kinh doanh) — trước chiết khấu, loại đơn hủy", metric: doanh_thu_gop}
+      # hint: gợi ý "dùng khi nào" cho người mới, hiện dưới mỗi lựa chọn và ở màn hình chào
+      - {label: "Doanh thu thuần (Tài chính) — sau chiết khấu, trừ hàng trả, chỉ đơn hoàn thành", metric: doanh_thu_thuan,
+         hint: "Tiền công ty thực sự thu về. Dùng cho báo cáo tài chính, so với kế hoạch. Nếu không chắc, hãy chọn loại này."}
+      - {label: "Doanh thu gộp (Kinh doanh) — trước chiết khấu, loại đơn hủy", metric: doanh_thu_gop,
+         hint: "Giá trị hàng bán ra theo giá niêm yết. Dùng để đo sức bán, so sánh doanh số giữa cửa hàng, kênh, sản phẩm."}
   - id: best_criteria
     pref_key: best_criteria
-    triggers: [bán chạy, tốt nhất, hiệu quả nhất, nổi bật nhất, mạnh nhất, dẫn đầu]
+    triggers: [bán chạy, tốt nhất, hiệu quả nhất, nổi bật nhất, mạnh nhất, dẫn đầu, bán tốt, bán giỏi, giỏi nhất, bán nhiều,
+               bán ít, bán kém, bán tệ, bán chậm, bán yếu, kém nhất, tệ nhất, yếu nhất, kém hiệu quả, mua nhiều, mua ít]
     weak_triggers: [top]
     requires_no_metric: true
     question: "Bạn muốn xếp hạng theo tiêu chí nào?"
