@@ -21,8 +21,8 @@ Ba điểm khác với việc hỏi thẳng một chatbot:
    cùng một cách tính.
 2. **Mô hình ngôn ngữ không được tin ngay.** Mọi câu lệnh, dù do mô hình hay bộ luật viết, đều qua các bước kiểm tra
    bằng code trước khi chạy. Mọi con số trong lời giải thích được tính lại từ bảng kết quả.
-3. **Chạy được không cần mô hình ngôn ngữ.** Không có khóa API thì hệ thống dùng bộ luật hiểu tiếng Việt có sẵn,
-   trả lời được các câu hỏi về chỉ số đã định nghĩa.
+3. **Nhanh khi câu hỏi rõ, cẩn thận khi câu hỏi tự do.** Câu bộ luật hiểu trọn vẹn được trả lời ngay không cần mô
+   hình; câu khác đi qua Router và Planner. Không bao giờ đoán bằng bộ luật khi chỉ hiểu một phần câu hỏi.
 
 ## Từ ngữ dùng trong tài liệu
 
@@ -33,7 +33,10 @@ Ba điểm khác với việc hỏi thẳng một chatbot:
 | Semantic layer | File cấu hình khai báo chỉ số, chiều và cách nối các bảng. Là “từ điển số liệu” của doanh nghiệp |
 | Text-to-SQL | Chuyển câu hỏi bằng lời thành câu lệnh SQL |
 | LLM | Mô hình ngôn ngữ lớn, gọi qua API (ở đây là OpenRouter hoặc Claude) |
-| Bộ luật offline | Phần hiểu tiếng Việt viết bằng code, không gọi mạng, dùng khi không có LLM |
+| Đường nhanh | Phần hiểu tiếng Việt viết bằng code; chỉ dùng khi hiểu trọn vẹn câu hỏi, không gọi mạng |
+| Router | Tác tử LLM nhanh: phân loại ý định, viết lại câu nối tiếp thành câu độc lập, tách câu nhiều ý |
+| Planner | Tác tử LLM lập kế hoạch truy vấn (chỉ số, chiều, bộ lọc, kỳ) hoặc viết SQL khi semantic layer không đủ |
+| Critic | Tác tử kiểm tra: đối chiếu kế hoạch với câu hỏi bằng code, rồi mô hình nhanh chấm kết quả; chưa đúng thì làm lại |
 | Workspace | Một doanh nghiệp: bộ cấu hình, dữ liệu và bộ câu hỏi kiểm tra riêng |
 | RBAC, RLS | Phân quyền theo vai trò (được xem bảng, cột nào) và theo dòng (chỉ thấy dữ liệu miền mình) |
 | HITL | Người dùng phải xem và bấm duyệt trước khi một truy vấn nặng được chạy |

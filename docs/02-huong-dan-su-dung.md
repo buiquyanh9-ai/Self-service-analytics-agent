@@ -24,10 +24,8 @@ Nên bắt đầu bằng `analyst`.
 
 - **Giữa:** lời chào và bốn thẻ việc trợ lý làm được. Mỗi thẻ có câu hỏi mẫu, bấm vào là hỏi luôn.
 - **Dưới:** ô gõ câu hỏi.
-- **Trái:** danh sách trang và các cuộc hội thoại cũ.
-- **Góc trên bên phải:** nút chuyển **Đơn giản / Chuyên gia**, nút ❓ hướng dẫn nhanh, nút đổi nền sáng/tối.
-
-Giữ chế độ **Đơn giản** khi mới dùng. Chế độ Chuyên gia có cùng tính năng nhưng hiện sẵn các nhãn kỹ thuật.
+- **Trái:** các cuộc hội thoại gần đây, bên dưới là mục **Công cụ** (các trang ở mục 6).
+- **Góc trên bên phải:** nút **Từ điển** (định nghĩa mọi chỉ số), nút ❓ hướng dẫn nhanh, nút đổi nền sáng/tối.
 
 ## 3. Hỏi thế nào
 
@@ -59,8 +57,8 @@ cảnh trong cùng cuộc hội thoại.
 | Lưu ý khi đọc kết quả | Điều cần biết về dữ liệu, ví dụ có vấn đề chất lượng đã biết trong kỳ đó |
 | Chỉ số này được tính thế nào | Định nghĩa và bộ phận chịu trách nhiệm |
 | Hỏi tiếp | Gợi ý bấm được |
-| Xem chi tiết kỹ thuật | Câu lệnh SQL, các bước kiểm tra, chi phí, nguồn gốc dữ liệu |
-| **Cảnh báo vàng** | Mô hình ngôn ngữ gặp lỗi, bộ luật có sẵn đã trả lời thay. Câu trả lời vẫn dùng được với câu hỏi về chỉ số, nhưng câu hỏi tự do có thể không được hiểu đủ |
+| 📐 Cách tính | Ngăn bên: định nghĩa chỉ số, các bước kiểm tra, câu lệnh SQL, chi phí, nguồn gốc từng cột, các bước xử lý |
+| **Cảnh báo vàng** | Mô hình ngôn ngữ tạm thời lỗi. Câu hỏi nêu rõ chỉ số và thời gian vẫn được trả lời; câu khác hãy thử lại sau ít phút |
 
 ## 5. Ba tình huống hay gặp
 
@@ -68,23 +66,23 @@ cảnh trong cùng cuộc hội thoại.
 doanh thu gộp hay thuần, vì hai phòng ban định nghĩa khác nhau. Chọn một; trợ lý nhớ lựa chọn trong cuộc hội thoại đó.
 
 **Trợ lý chờ bạn duyệt.** Câu hỏi quét nhiều dữ liệu (ví dụ toàn bộ lịch sử theo từng cửa hàng) sẽ dừng lại. Bạn
-xem ước lượng dung lượng, bấm **Duyệt & chạy**, hoặc thu hẹp thời gian rồi hỏi lại.
+xem ước lượng dung lượng, bấm **Đồng ý chạy**, hoặc thu hẹp thời gian rồi hỏi lại.
 
 **Trợ lý từ chối.** Xảy ra khi câu hỏi cần dữ liệu ngoài quyền của tài khoản (cột nhạy cảm, miền khác), ngoài phạm
 vi (dự báo, khuyến nghị đầu tư), hoặc yêu cầu sửa xóa dữ liệu. Hệ thống chỉ đọc.
 
-## 6. Các trang khác
+## 6. Các trang trong mục Công cụ
 
 | Trang | Dùng để | Ai thấy |
 |---|---|---|
-| 💬 Hỏi dữ liệu | Hỏi đáp | Mọi người |
+| 🗂️ Dữ liệu đầu vào | Xem từng dòng của các bảng trong kho | Mọi người |
+| 📚 Chỉ số & bảng | Xem có những chỉ số, cách tính và bảng nào | Mọi người |
 | ⌨️ Tự viết SQL | Người biết SQL tự viết truy vấn; hệ thống vẫn kiểm tra quyền và chi phí, tự sửa lỗi thường gặp | Mọi người |
-| 📚 Dữ liệu và chỉ số | Xem có những chỉ số, cách chia và bảng nào | Mọi người |
 | 🧾 Lịch sử câu hỏi | Các câu đã hỏi và truy vấn đã chạy | Mọi người (admin thấy của tất cả) |
 | 🩺 Chất lượng dữ liệu | Vấn đề dữ liệu được phát hiện tự động và cách xử lý | Admin |
 | 🔀 Nguồn gốc dữ liệu | Mỗi bảng, mỗi cột được tạo từ nguồn nào | Admin |
-| 🎯 Đo độ chính xác | Chạy bộ câu hỏi kiểm tra | Admin |
-| ⚙️ Cài đặt | Chế độ trả lời, mô hình ngôn ngữ, ngưỡng duyệt | Admin |
+| 🎯 Đo độ chính xác | Chạy bộ câu hỏi kiểm tra (đúng số) và bộ kịch bản hội thoại có AI chấm (đúng ý), so sánh bật/tắt từng tính năng | Admin |
+| ⚙️ Cài đặt | Mô hình ngôn ngữ, đường nhanh, đa nhiệm, tác tử kiểm tra, ngưỡng duyệt | Admin |
 
 ## 7. Thử trong 10 phút
 

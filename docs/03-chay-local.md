@@ -31,9 +31,9 @@ dùng thử. Dừng server bằng `Ctrl + C`.
 
 Các lần sau chỉ cần kích hoạt môi trường và chạy `.\run.ps1`.
 
-## 3. Bật mô hình ngôn ngữ (tùy chọn)
+## 3. Bật mô hình ngôn ngữ
 
-Không có khóa, hệ thống chạy bằng bộ luật offline. Để hỏi được câu tự do:
+Không có khóa, trợ lý chỉ trả lời được câu hỏi nêu rõ chỉ số và thời gian (đường nhanh). Để hỏi được câu tự do:
 
 1. Chép `.env.example` thành `.env` ở gốc dự án.
 2. Điền **một** trong hai khóa:
@@ -57,7 +57,8 @@ Chi phí tham khảo: lượt đo 67 câu ngày 12/11/2026 tốn khoảng 0,02 U
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `WORKSPACE` | trống (doanh nghiệp ABC) | Tên thư mục trong `workspaces/` |
-| `LLM_MODE` | `auto` | `auto`, `claude`, `openrouter`, `offline`. `auto`: Claude nếu có khóa Anthropic, kế đến OpenRouter, cuối cùng offline |
+| `LLM_MODE` | `auto` | `auto`, `openrouter`, `claude`. `auto`: OpenRouter nếu có khóa, kế đến Claude. Không còn `offline` |
+| `ROUTER_MODEL` | `anthropic/claude-haiku-5.5` | Model nhanh cho Router và lời diễn giải |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | trống, `openai/gpt-6-luna` | Gọi mô hình qua OpenRouter |
 | `ANTHROPIC_API_KEY`, `LLM_MODEL`, `LLM_EFFORT` | trống, `claude-opus-5-5`, `medium` | Gọi Claude |
 | `APP_SECRET` | giá trị dùng cho phát triển | Khóa ký phiên đăng nhập. **Phải đổi khi đưa lên mạng** |
@@ -125,7 +126,7 @@ Chạy lại công cụ không ghi đè file đã rà. Khi dữ liệu thay đ�
 | `python` không được nhận | Chưa cài Python hoặc chưa thêm vào PATH | Cài lại từ python.org, tích “Add to PATH” |
 | Cổng 8000 đang bị dùng | Một server khác đang chạy | `.\run.ps1 -Port 8010` |
 | `Không tìm thấy workspace '…'` | Gõ sai tên hoặc chưa tạo | Xem tên thư mục trong `workspaces/`; tạo mới bằng `app.onboard` |
-| Thanh trên ghi chế độ offline dù đã có khóa | File `.env` sai chỗ, sai tên biến, hoặc chưa khởi động lại | `.env` phải ở gốc dự án; khởi động lại server |
+| Thanh trên ghi “Chưa có mô hình ngôn ngữ” dù đã có khóa | File `.env` sai chỗ, sai tên biến, hoặc chưa khởi động lại | `.env` phải ở gốc dự án; khởi động lại server |
 | Câu trả lời có cảnh báo vàng | Mô hình lỗi (hết hạn mức, mất mạng, sai tên mô hình) | Kiểm tra số dư và tên mô hình ở trang Cài đặt |
 | Chữ tiếng Việt lỗi trong cửa sổ lệnh | Bảng mã của console | Dùng `run.ps1` (đã đặt UTF-8) thay vì gọi `uvicorn` trực tiếp |
 | Số liệu lạ sau khi thử “Áp dụng quy tắc sửa” | Kho đã được dựng lại với quy tắc sửa | Bấm Hoàn tác ở trang Chất lượng dữ liệu, hoặc `.\run.ps1 -Rebuild` |

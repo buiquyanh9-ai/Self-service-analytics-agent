@@ -6,8 +6,12 @@ dùng **duyệt SQL trước khi chạy trên bảng lớn (HITL)**, chạy trê
 kiểm chứng số liệu 100%**, tự sửa SQL lỗi, phân tích **nguyên nhân biến động**, và **phát hiện – xử lý sai lệch dữ liệu**
 bằng kiểm định thống kê.
 
-Chạy được **ngay không cần API key** (bộ hiểu tiếng Việt offline trên semantic layer). Đặt `OPENROUTER_API_KEY` hoặc
-`ANTHROPIC_API_KEY` để bật **LLM function calling** cho câu hỏi tự do; mọi đầu ra của LLM vẫn qua các chốt chặn bằng code.
+Agent gồm nhiều tác tử: **Router** (mô hình nhanh) phân loại ý định, viết lại câu nối tiếp thành câu độc lập và tách
+câu nhiều ý; **Planner** (LLM function calling) lập kế hoạch truy vấn; **Repairer** sửa SQL lỗi; **Narrator** viết lời
+diễn giải; **Critic** kiểm tra câu trả lời có trúng câu hỏi không (đối chiếu kế hoạch bằng code, rồi mô hình nhanh chấm
+kết quả và yêu cầu Planner làm lại khi chưa đúng). Câu hỏi mà bộ hiểu tiếng Việt viết bằng code hiểu **trọn vẹn** đi **đường nhanh**, không gọi mô hình. Cần
+`OPENROUTER_API_KEY`; mọi đầu ra của LLM vẫn qua các chốt chặn bằng code. Không còn chế độ offline: câu bộ luật chỉ
+hiểu một phần luôn đi qua LLM, LLM lỗi thì báo lỗi thay vì đoán.
 
 Hệ thống **không gắn với một doanh nghiệp**: mỗi doanh nghiệp là một *workspace* gồm bộ cấu hình, dữ liệu và bộ câu
 hỏi đánh giá riêng. Repo kèm hai doanh nghiệp mẫu thuộc hai ngành khác nhau (bán lẻ điện máy, chuyển phát) và một công
@@ -15,13 +19,14 @@ cụ nhận kho dữ liệu mới (mục 2).
 
 ![Màn hình chào](docs/screenshots/welcome.png)
 
-Giao diện có hai chế độ, chuyển bằng nút ở góc trên bên phải. **Đơn giản** (mặc định) dành cho người mới: màn hình
-chào nói trợ lý làm được gì kèm câu hỏi mẫu của chính doanh nghiệp; mỗi câu trả lời nhắc lại cách trợ lý hiểu câu hỏi,
-nêu bằng lời thường vì sao con số đáng tin, định nghĩa của chỉ số, và gợi ý câu hỏi tiếp theo; phần SQL, kiểm duyệt,
-chi phí thu gọn trong mục “Xem chi tiết kỹ thuật”. **Chuyên gia** hiện ngay các nhãn kỹ thuật và các tab như trước.
-Mọi tính năng có ở cả hai chế độ.
+Giao diện là một cột hỏi đáp. Màn hình chào nói trợ lý làm được gì kèm câu hỏi mẫu của chính doanh nghiệp; mỗi câu
+trả lời nhắc lại cách trợ lý hiểu câu hỏi (“Mình hiểu là”), vì sao con số đáng tin, và gợi ý câu hỏi tiếp theo. Nút
+**📐 Cách tính** mở ngăn bên với định nghĩa chỉ số, các bước kiểm tra, SQL, kế hoạch truy vấn, chi phí, nguồn gốc từng
+cột và các bước xử lý. Nút **Từ điển** ở thanh trên mở định nghĩa mọi chỉ số. Các trang công cụ (dữ liệu đầu vào, chỉ
+số & bảng, tự viết SQL, lịch sử câu hỏi; admin thêm chất lượng dữ liệu, nguồn gốc dữ liệu, đo độ chính xác, cài đặt)
+nằm ở mục **Công cụ** cột trái.
 
-![Câu trả lời ở chế độ Đơn giản](docs/screenshots/chat.png)
+![Câu trả lời](docs/screenshots/chat.png)
 
 ---
 
@@ -44,18 +49,21 @@ Mở <http://127.0.0.1:8000> và đăng nhập bằng nút tài khoản demo:
 | `analyst_bac` | `analyst123` | Analyst | + **RLS**: chỉ thấy dữ liệu Miền Bắc |
 | `analyst_nam` | `analyst123` | Analyst | + **RLS**: chỉ thấy dữ liệu Miền Nam |
 
-Bật LLM: chép `.env.example` thành `.env` ở gốc dự án rồi điền một trong hai khóa (file `.env` được nạp tự động và
-đã nằm trong `.gitignore`):
+Khóa mô hình: chép `.env.example` thành `.env` ở gốc dự án rồi điền `OPENROUTER_API_KEY` (file `.env` được nạp tự
+động và đã nằm trong `.gitignore`):
 
-- `OPENROUTER_API_KEY=...` → gọi model qua OpenRouter (mặc định `openai/gpt-6-luna`, đổi bằng `OPENROUTER_MODEL`;
-  ở lượt đo mục 6, model này đúng nhiều câu hơn `openai/gpt-4o-mini` với chi phí thấp hơn).
-- `ANTHROPIC_API_KEY=sk-ant-...` → gọi Claude (mặc định `claude-opus-5-5`, effort `medium`, có refusal fallback).
+- Planner mặc định `openai/gpt-6-luna` (đổi bằng `OPENROUTER_MODEL` hoặc trang Cài đặt).
+- Router và lời diễn giải mặc định `anthropic/claude-haiku-5.5` (đổi bằng `ROUTER_MODEL`): ở lượt đo 15/11/2026 trên
+  10 câu phân loại, model này đúng 10/10 với trung vị 1,65 giây/lượt, so với 4,2 giây của `gpt-6-luna`, cùng giá.
+- `ANTHROPIC_API_KEY=sk-ant-...` → gọi Claude trực tiếp (dự phòng; chưa đo).
+- Ngân sách thời gian mỗi câu mặc định 10 giây (`latency_budget_s`): câu đã gần hết ngân sách thì bỏ lượt mô hình viết
+  lời và dùng bản diễn giải tự động, cũng đã kiểm chứng số liệu.
 
-Đổi chế độ/model trong trang **Cài đặt** (Admin). Không có khóa nào thì hệ thống chạy bộ luật offline.
+Không có khóa: chỉ trả lời được câu hỏi nêu rõ chỉ số và thời gian (đường nhanh); câu khác được báo là cần mô hình.
 
-Kiểm thử: `python -m pytest -q tests` (141 test: governance, chi phí, semantic, NLU, audit số liệu, so khớp eval, vòng lặp
-gọi tool của LLM bằng client giả, các chốt chặn quanh LLM, đa doanh nghiệp, công cụ nhận kho mới, phần phục vụ giao
-diện thân thiện). Không test nào gọi mạng.
+Kiểm thử: `python -m pytest -q tests` (298 test: governance, chi phí, semantic, NLU, audit số liệu, so khớp eval, eval hội thoại, giả thuyết biến động, Router
+và đường nhanh, vòng lặp gọi tool của LLM, các chốt chặn quanh LLM, đa doanh nghiệp, công cụ nhận kho mới, phần phục vụ
+giao diện thân thiện). Không test nào gọi mạng: mọi mô hình được thay bằng client giả trong `tests/fake_llm.py`.
 
 ---
 
@@ -118,17 +126,16 @@ phần gây biến động cho chỉ số dạng tỷ lệ; sơ đồ nguồn g�
 
 ## 3. Kịch bản demo (10 phút)
 
-Tên trang và nhãn dưới đây theo chế độ **Chuyên gia**; ở chế độ Đơn giản các trang mang tên bằng lời thường (ví dụ
-“SQL Console” là “Tự viết SQL”, “Lineage” là “Nguồn gốc dữ liệu”) và các tab kỹ thuật nằm trong “Xem chi tiết kỹ thuật”.
+Các trang công cụ nằm ở mục **Công cụ** cột trái; chi tiết kỹ thuật của mỗi câu trả lời nằm trong ngăn **📐 Cách tính**.
 
 1. **analyst** → *“Doanh thu tháng trước theo miền”* → agent **hỏi lại** “doanh thu gộp hay thuần?” (2 phòng ban định
    nghĩa khác nhau) → chọn *thuần* → bảng + biểu đồ + diễn giải; badge `✓ 9/9 số liệu khớp kết quả`.
 2. Bấm một gợi ý ở dòng **Hỏi tiếp** (*“Chia theo kênh bán”*, *“So với cùng kỳ năm trước”*) hoặc gõ *“còn Miền Nam thì
    sao?”* → agent **nhớ ngữ cảnh** và lựa chọn định nghĩa.
 3. *“Doanh thu thuần theo cửa hàng”* (toàn bộ lịch sử, ~33 MB) → **chờ duyệt (HITL)**: xem/sửa SQL, bảng chi phí theo
-   bảng/cột/phân vùng → Duyệt & chạy. Tab *Kiểm duyệt*, *Chi phí quét*, *Lineage*, *Pipeline agent*, *Kiểm chứng số liệu*.
+   bảng/cột/phân vùng → Đồng ý chạy. Ngăn *Cách tính* có các bước kiểm tra, chi phí quét, nguồn gốc cột, các bước xử lý, đối chiếu số liệu.
 4. Đăng nhập **analyst_bac**, hỏi *“Doanh thu thuần theo miền tháng 10/2026”* → chỉ ra Miền Bắc (RLS tiêm vào AST).
-5. **SQL Console**: chạy câu mẫu có cột sai `thanh_tien` → agent **tự sửa** thành `tt` (theo mô tả catalog), cảnh báo
+5. **Tự viết SQL**: chạy câu mẫu có cột sai `thanh_tien` → agent **tự sửa** thành `tt` (theo mô tả catalog), cảnh báo
    `YEAR(ngay_dh)` làm mất cắt phân vùng. Thử `DROP TABLE`, `SELECT * FROM dw.dim_kh`, `read_csv(...)` → bị chặn.
 6. **admin** → *“Vì sao doanh thu thuần tháng 9/2026 giảm so với cùng kỳ?”* → phân rã đóng góp theo 6 chiều, drill-down,
    kiểm định z-score, **KS test phát hiện đơn giá bị ghi theo nghìn đồng** ở 10 cửa hàng TP.HCM → kết luận *lỗi dữ liệu*.
@@ -136,8 +143,8 @@ Tên trang và nhãn dưới đây theo chế độ **Chuyên gia**; ở chế �
    (hết hàng) → nguyên nhân *kinh doanh*.
 8. **Chất lượng dữ liệu** → finding *Trôi lệch đơn vị đơn giá (POS)* → **Áp dụng quy tắc sửa** (được kiểm duyệt AST) →
    build lại raw → stg → dw → doanh thu tháng 9 được khôi phục (bảng trước/sau). Có nút **Hoàn tác**.
-9. **Lineage**: sơ đồ raw → staging → dw; bấm cột `dw.fct_ct_dh.tt` để truy ngược tới `raw.pos_ct_don_hang.don_gia`...
-10. **Đánh giá (Eval)**: chạy bộ 41 câu → execution accuracy theo độ khó; **Tối ưu few-shot (train → dev)**.
+9. **Nguồn gốc dữ liệu**: sơ đồ raw → staging → dw; bấm cột `dw.fct_ct_dh.tt` để truy ngược tới `raw.pos_ct_don_hang.don_gia`...
+10. **Đo độ chính xác**: chạy bộ 41 câu → execution accuracy theo độ khó; **Tự học từ lỗi (train → dev)**.
 
 ![Phân tích nguyên nhân biến động](docs/screenshots/variance.png)
 
@@ -145,7 +152,7 @@ Doanh nghiệp thứ hai chạy cùng giao diện với nội dung của riêng 
 
 ![Màn hình chào của doanh nghiệp giao vận](docs/screenshots/welcome_xyz.png)
 
-Ảnh khác trong `docs/screenshots/`: `expert.png` (chế độ Chuyên gia), `sql_console.png`, `data_quality.png`,
+Ảnh khác trong `docs/screenshots/` (chụp ở giao diện trước, bố cục đã đổi): `sql_console.png`, `data_quality.png`,
 `lineage.png`, `mobile.png`, `variance_xyz.png`.
 
 ---
@@ -161,11 +168,23 @@ FastAPI (app/main.py) ──► Agent (app/agent.py) — đồ thị trạng th�
                             ├─► variance_analyst (insights.py: phân rã, drill-down, kiểm định, nguyên nhân gốc)
                             └─► sql_generator ─► optimizer ─► validator ⇄ repairer (rule-based / LLM)
                                                                  │
-                                                  cost_guard ── HITL (chờ duyệt) ── executor ─► analyst ─► explainer ─► finalize (log, bộ nhớ)
-   planner = chốt chặn bằng code (câu giới thiệu, SQL đã xác nhận, thuật ngữ mơ hồ)
-             ─► LLM function calling qua OpenRouter hoặc Claude (search_schema, describe_table, get_column_values,
-                dry_run_sql, compile_semantic_plan, submit_answer), có bản nháp kế hoạch của bộ luật để kiểm tra
-             ─► NLU tiếng Việt offline (nlu.py) khi không có LLM hoặc LLM lỗi
+                                                  cost_guard ── HITL (chờ duyệt) ── executor ─► analyst ─► explainer ─► critic ─► finalize (log, bộ nhớ)
+                                                                                              │ chưa đúng
+                                                                                              └─► Planner lập lại (1 lần)
+   planner = chốt chặn bằng code (chủ đề cấm, sửa/xóa dữ liệu, cột bị hạn chế, dự báo, mã không tồn tại, tra cứu mã)
+             ─► đường nhanh: bộ luật (nlu.py) hiểu TRỌN VẸN câu hỏi → không gọi mô hình
+             ─► Router (model nhanh): ý định, câu hỏi độc lập, tách câu nhiều ý; câu lạc đề/xã giao trả lời ngay.
+                Planner chạy đón trước SONG SONG với Router trên câu gốc; Router không đổi nội dung câu thì dùng luôn
+             ─► câu nhiều ý (tối đa 4): mỗi ý chạy song song như một câu độc lập, gộp thành câu trả lời nhiều khối
+             ─► đường nhanh trên câu đã viết lại ─► SQL đã xác nhận ─► thuật ngữ mơ hồ / thiếu chỉ số: hỏi lại bằng code
+             ─► Planner: thường MỘT lượt gọi — code đưa sẵn bản nháp của bộ luật và mô tả cột của các bảng liên quan
+                nhất (schema linking); mô hình nộp thẳng kế hoạch, code biên dịch / chạy thử ngay lúc nộp và trả lỗi
+                lại trong cùng hội thoại. Tool (search_schema, describe_table, get_column_values...) chỉ dùng khi cần
+             ─► kiểm tra độ bao phủ bằng code: plan không được bỏ qua mã/từ trong câu hỏi rồi trả số liệu chung
+             ─► Critic lớp code: plan thiếu bộ lọc/kỳ/cách chia/top N người dùng NÊU RÕ thì vá và báo; chỉ số được hỏi
+                đứng đầu câu trả lời
+   critic   = LLM chấm (model nhanh, chạy song song với lượt viết lời) kết quả của Planner: “chưa đúng” thì Planner
+              lập lại kế hoạch một lần kèm nhận xét, hết thời gian thì câu trả lời mang cảnh báo
         │
 DuckDB read-only (enable_external_access=false, lock_configuration, timeout) ◄─ kho của workspace đang chọn
 ```
@@ -228,7 +247,93 @@ tầng raw/staging), nên phần kiểm định nguồn bẩn và quy tắc sử
 
 ## 6. Kết quả đo
 
-Execution accuracy trên bộ câu hỏi của từng doanh nghiệp, đo ngày 12/11/2026, **mỗi cấu hình một lượt chạy**:
+**Kiến trúc hiện tại (Router + đường nhanh + Planner, không còn offline), đo ngày 15/11/2026**, mỗi cấu hình một lượt.
+Router dùng `anthropic/claude-haiku-5.5`. Thời gian là thời gian chờ thực tế mỗi câu (chế độ eval không gọi lượt viết lời).
+
+| Doanh nghiệp | Cấu hình | Đúng | Đường đi (nhanh · LLM) | Trung vị | p90 | Chậm nhất |
+|---|---|---|---|---|---|---|
+| ABC (41 câu) | đường nhanh bật, Planner `gpt-6-luna` | 41/41 | 34 · 7 | 0,2 s | 6,6 s | 12,7 s |
+| XYZ (26 câu) | đường nhanh bật, Planner `gpt-6-luna` | 25/26 → 26/26 sau sửa* | 23 · 3 | 0,4 s | 2,2 s | 9,4 s |
+| ABC (41 câu) | tắt đường nhanh, Planner `gpt-6-luna` | 41/41 | 0 · 41 | 6,5 s | 10,4 s | 14,7 s |
+| ABC (41 câu) | tắt đường nhanh, Planner `claude-haiku-5.5` | 41/41 | 0 · 41 | 6,2 s | 8,8 s | 14,0 s |
+
+\* Câu sai: “Doanh thu tháng trước là bao nhiêu?” — Router tự chọn định nghĩa thay người dùng. Đã thêm chốt chặn bằng
+code (câu gốc có thuật ngữ mơ hồ thì luôn hỏi lại) và test hồi quy; câu này giờ được hỏi lại đúng. Lượt chạy lại cả bộ XYZ (có Critic): 26/26.
+
+**Eval hội thoại (20 kịch bản, 28 lượt) có mô hình chấm, đo ngày 15/11/2026** (`python -m app.conv_eval`; Planner
+`gpt-6-luna`, mô hình chấm `claude-haiku-5.5`). Lượt chạy đầu: 14/20 kịch bản đạt. Trong 6 kịch bản trượt có 3 lỗi
+thật của bot, đã sửa và có test hồi quy:
+- câu nhiều ý có ý 2 nói “cùng kỳ” bị hiểu thành từ đầu năm đến nay;
+- “chia theo kênh bán” sau câu “vì sao” lại chạy phân tích nguyên nhân;
+- tài khoản chỉ xem được Miền Bắc nhận câu “Dẫn đầu là Miền Bắc”.
+
+3 kịch bản còn lại trượt do lỗi của chính bộ eval (cắt câu trả lời trước khi đưa cho mô hình chấm, so khớp chữ bỏ dấu
+nên “tỷ ₫” khớp nhầm “Công ty”). Sau khi sửa: 18/20.
+
+So sánh bật/tắt từng tính năng (mỗi cấu hình chạy một lượt; một kịch bản = 5 điểm, nên chênh 5 điểm nằm trong dao
+động giữa các lượt):
+
+| Cấu hình | Kịch bản đạt | Lượt đạt | Trung vị mỗi lượt | p90 | Chậm nhất |
+|---|---|---|---|---|---|
+| Đầy đủ | 90% | 92,9% | 6,0 s | 9,7 s | 15,6 s |
+| Tắt Critic | 90% | 92,9% | 4,4 s | 10,2 s | 12,9 s |
+| Tắt đa nhiệm | **70%** | 75,0% | 3,7 s | 8,7 s | 11,2 s |
+| Tắt lập kế hoạch đón trước | 90% | 92,9% | 6,1 s | 9,5 s | 10,5 s |
+| Tắt giả thuyết biến động | 95% | 96,4% | 3,7 s | 9,1 s | 12,8 s |
+| Tắt đường nhanh | 85% | 89,3% | 7,2 s | 9,7 s | 14,7 s |
+
+Đọc kết quả: đa nhiệm là tính năng có tác dụng rõ nhất (tắt đi thì 4 kịch bản nhiều ý chỉ được trả lời ý đầu). Critic,
+lập kế hoạch đón trước và giả thuyết biến động không đổi độ đúng ý đo được trên bộ này; trung vị thời gian dao động
+2–3 giây giữa các lượt nên cũng chưa kết luận được về tốc độ. Lỗi lặp lại ở nhiều lượt: câu 4 ý (c11) đôi khi mất ý
+cuối, và lời diễn giải của mô hình có lần nói “chưa có số đơn theo kênh” dù bảng có cột đó. Mô hình chấm cũng có lần
+chấm sai (chê “giá trị đơn trung bình chưa lọc đơn hoàn thành” dù định nghĩa chỉ số đã lọc sẵn).
+
+**Giả thuyết nguyên nhân cho câu “vì sao”** (bước 6 của phân tích biến động): mô hình nêu tối đa 3 giả thuyết, code
+chạy truy vấn kiểm chứng. Ví dụ “Vì sao doanh thu thuần tháng 9/2026 giảm so với cùng kỳ?”: bác bỏ “số đơn tại cửa
+hàng Miền Nam giảm” (thực ra tăng 10%), xác nhận “giá trị mỗi đơn ở cửa hàng Flagship giảm” (−37%), khớp với lỗi
+đơn vị đơn giá mà kiểm định KS tìm ra. Lượt gọi mô hình mất khoảng 5 giây, nên câu “vì sao” đi đường nhanh mất 7–8,5
+giây thay vì 0,5–2 giây; câu đã tốn nhiều thời gian ở Planner thì bỏ qua bước này.
+
+**Planner một lượt + chạy đón trước song song Router + trả lời song song câu nhiều ý, đo ngày 15/11/2026** (cấu hình
+hiện tại; Planner `gpt-6-luna`, Critic bật):
+
+| Doanh nghiệp | Cấu hình | Đúng | Trung vị | p90 | Chậm nhất | Câu được LLM chấm |
+|---|---|---|---|---|---|---|
+| ABC (41 câu) | đường nhanh bật | 41/41 | 0,2 s | 5,2 s | 7,5 s | 4/6 câu đi qua Planner |
+| XYZ (26 câu) | đường nhanh bật | 26/26 | 0,3 s | 1,9 s | 6,5 s | 0/1 |
+| ABC (41 câu) | tắt đường nhanh | 41/41 | 5,4 s | 7,0 s | 14,5 s | 33/37 |
+
+So với lượt đo trước khi có ba thay đổi này (ABC tắt đường nhanh: trung vị 6,5 s, p90 10,4 s): Planner thường chỉ còn
+một lượt gọi (2,3–4,4 s), và Router (~1,5 s) chạy song song với Planner thay vì nối tiếp.
+
+11 kịch bản hội thoại chạy tay (câu 2–4 ý, câu nối tiếp 3 lượt, định nghĩa + số liệu, xếp hạng + “vì sao”, lạc đề
+sau câu số liệu): 10/11 đúng ý; kịch bản còn lại đúng hành vi nhưng một ý phải chờ duyệt SQL vì quét bảng lớn. Trung vị
+4,7 s mỗi lượt; chậm nhất 14,3 s (câu 2 ý mà một ý mô hình phải tự viết SQL). Planner `claude-haiku-5.5` đo cùng
+lúc không nhanh hơn `gpt-6-luna`, và qua OpenRouter không được đọc prompt từ bộ nhớ đệm (luna đọc 5,5/5,6 nghìn token
+từ bộ nhớ đệm) nên giữ `gpt-6-luna`.
+
+**Thêm Critic (tác tử kiểm tra), đo ngày 15/11/2026 (trước khi có Planner một lượt):**
+
+| Doanh nghiệp | Cấu hình | Đúng | Trung vị | p90 | Chậm nhất | Critic |
+|---|---|---|---|---|---|---|
+| ABC (41 câu) | đường nhanh bật | 41/41 | 0,3 s | 8,4 s | 19,7 s | chấm 6 câu, đều “đúng” |
+| XYZ (26 câu) | đường nhanh bật | 26/26 | 0,4 s | 1,9 s | 9,7 s | 1 câu không kịp chấm |
+| ABC (41 câu) | tắt đường nhanh | 41/41 | 8,1 s | 10,8 s | 18,1 s | 37 câu không kịp chấm |
+
+- Lượt đo đầu tiên của LLM chấm cho ra 2 lần “chưa đúng” với 2 câu thật ra đúng: chỉ số “số đơn hàng” đã lọc sẵn đơn
+  hoàn thành; chiều “miền phát” của doanh nghiệp chuyển phát nghĩa là nơi giao tới. Đã sửa bằng cách đưa định nghĩa chỉ
+  số và từ đồng nghĩa của chiều vào prompt chấm.
+- Chỉ chấm khi còn kịp lập lại kế hoạch (có kết quả trước giây thứ 6). Với Planner `gpt-6-luna` (khoảng 5 giây mỗi lượt
+  gọi), phần lớn câu đi qua Planner có kết quả sau mốc này nên không được chấm. Lớp kiểm tra bằng code của Critic chạy
+  với mọi câu, không tốn thời gian.
+- Câu “trung bình mỗi đơn hàng ở Hà Nội tháng trước” giờ mở đầu bằng giá trị đơn trung bình. Lỗi nằm ở phần diễn giải tự
+  động (liệt kê cột theo thứ tự, cột phụ của tỷ số đứng trước), không phải ở mô hình.
+- Thời gian của Planner dao động giữa các lượt đo (trung vị 6,5 s và 8,1 s cho cùng cấu hình), chưa đủ mẫu để kết luận
+  Critic làm chậm hay không.
+
+Lượt “tắt đường nhanh” đo riêng chất lượng các tác tử LLM: mọi câu đều đi qua Router và Planner mà vẫn đúng 41/41.
+
+Kết quả của kiến trúc cũ (có chế độ offline), đo 12/11/2026:
 
 | Doanh nghiệp | Chế độ | Đúng | Theo độ khó (easy · medium · hard · extra) | Giây/câu | Diễn giải qua audit số liệu |
 |---|---|---|---|---|---|
@@ -239,17 +344,15 @@ Execution accuracy trên bộ câu hỏi của từng doanh nghiệp, đo ngày 
 | XYZ (26 câu) | OpenRouter `openai/gpt-4o-mini` | 25/26 | 100 · 100 · 100 · 66,7 % | 11,8 | 100 % |
 | XYZ (26 câu) | OpenRouter `openai/gpt-6-luna` | 26/26 | 100 · 100 · 100 · 100 % | 6,2 | 100 % |
 
-Ở các lượt LLM trên, không câu nào rơi về bộ luật offline; mỗi câu tốn trung bình 2,2 lượt gọi API. Chi phí đo bằng số
-dư OpenRouter cho cả 67 câu của hai doanh nghiệp: khoảng 0,08 USD với `gpt-4o-mini`, khoảng 0,02 USD với `gpt-6-luna`.
-
 Cách đọc các con số này:
 
 - Các câu “extra” nằm ngoài semantic layer (top khách hàng, danh sách có điều kiện, trung bình theo thứ trong tuần…).
-  Bộ luật offline không diễn đạt được nên sai gần hết; LLM tự viết SQL qua `dry_run_sql`.
+  Bộ luật không diễn đạt được nên các câu này luôn đi qua Planner; LLM tự viết SQL qua `dry_run_sql`.
 - Bộ câu hỏi do người xây hệ thống viết và đã được dùng để sửa lỗi, nên kết quả lạc quan hơn so với câu hỏi của người
   dùng thật. Cùng một cấu hình chạy lại có thể lệch 1–2 câu.
-- Con số của chế độ LLM chỉ có nghĩa khi biết câu đó thật sự do LLM trả lời: khi LLM lỗi, agent chuyển sang bộ luật
-  offline và ghi chú trong câu trả lời. Kịch bản đo ghi lại chế độ thực tế của từng câu.
+- Execution accuracy không đo được lỗi “trả lời lạc đề / sai trọng tâm”. Bộ câu hỏi hội thoại có chấm bằng LLM-judge là
+  bước tiếp theo trong lộ trình (kèm tác tử Critic).
+- Kết quả eval ghi đường đi (`path`) và ý định Router (`route`) của từng câu.
 - **Chế độ Claude chưa được đo** vì chưa có khóa Anthropic; vòng lặp gọi tool của Claude mới được kiểm bằng client giả.
 - Chức năng tự tối ưu few-shot (học từ lỗi trên tập train, đo trên tập dev) có sẵn ở trang Đánh giá nhưng chưa được đo
   lại sau các thay đổi này.
@@ -280,4 +383,4 @@ Tài liệu cho người mới (kỹ thuật, cách dùng, cách chạy, cách d
 - **Vector DB** → BM25 local; interface `search_schema/search_fewshots` thay được bằng Qdrant/pgvector.
 - **Warehouse** → DuckDB (mô phỏng phân vùng theo ngày & bytes-scanned kiểu BigQuery); SQL dialect qua sqlglot nên
   chuyển sang BigQuery/Snowflake/Trino chủ yếu là đổi `DIALECT` và connector.
-- NLU offline chỉ bao phủ các câu hỏi biểu diễn được bằng semantic layer; câu tự do cần LLM.
+- Đường nhanh (nlu.py) chỉ bao phủ các câu hỏi biểu diễn được bằng semantic layer; câu tự do cần LLM.

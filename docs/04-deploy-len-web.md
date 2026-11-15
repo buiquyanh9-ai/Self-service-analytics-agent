@@ -34,7 +34,7 @@ vẫn hiện làm nút dùng thử; chúng chỉ đọc dữ liệu giả lập.
 Việc cần tự làm:
 
 1. **Đặt hạn mức chi tiêu cho khóa API** trên trang OpenRouter. Ai vào trang cũng hỏi được, mỗi câu hỏi tốn tiền.
-   Không muốn tốn thì không đặt khóa: hệ thống chạy bằng bộ luật có sẵn.
+   Không đặt khóa thì trợ lý chỉ trả lời được câu hỏi nêu rõ chỉ số và thời gian.
 2. Không phát mật khẩu admin rộng rãi. Admin đổi được cài đặt, áp dụng quy tắc sửa dữ liệu và chạy lượt đo tốn tiền API.
 3. Với dữ liệu thật, không dùng tài khoản trong `policies.yml` (mật khẩu lưu dạng chữ thường); dùng Supabase Auth
    (`SUPABASE_JWT_SECRET`) hoặc đặt hệ thống sau một lớp đăng nhập khác.
@@ -67,7 +67,7 @@ docker run --rm -p 8000:8000 -e APP_SECRET=mot-chuoi-ngau-nhien-dai -e PASSWORD_
 
    | Biến | Điền gì |
    |---|---|
-   | `OPENROUTER_API_KEY` | Khóa của bạn, hoặc để trống để chạy bộ luật có sẵn |
+   | `OPENROUTER_API_KEY` | Khóa của bạn (để trống: chỉ trả lời câu nêu rõ chỉ số và thời gian) |
    | `ANTHROPIC_API_KEY`, `SUPABASE_JWT_SECRET` | Để trống |
 
 4. Bấm **Apply**. Lần build đầu mất khoảng 5–10 phút.
@@ -106,6 +106,6 @@ Mọi dịch vụ chạy được Dockerfile đều dùng được. Container l�
 1. `/api/health` trả `"ok": true` và đúng tên doanh nghiệp.
 2. Màn hình đăng nhập **không** có nút tài khoản admin; đăng nhập `admin` / `admin123` bị từ chối.
 3. Đăng nhập analyst, hỏi một câu mẫu trên màn hình chào, có bảng và dấu ✓ xanh.
-4. Thanh trên hiện đúng chế độ (tên mô hình, hoặc bộ luật có sẵn nếu không đặt khóa).
+4. Thanh trên hiện “Có mô hình ngôn ngữ” (hoặc “Chưa có mô hình ngôn ngữ” nếu không đặt khóa).
 5. Hỏi một câu tự do; không có cảnh báo vàng. Có cảnh báo nghĩa là khóa API hoặc tên mô hình sai.
 6. Xem số dư khóa API sau vài câu hỏi để biết mức tiêu thực tế.

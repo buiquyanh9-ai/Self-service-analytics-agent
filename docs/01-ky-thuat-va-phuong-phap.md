@@ -17,7 +17,10 @@ quyết định.**
 | Truy vấn quá nặng | Ước lượng dung lượng quét; vượt ngưỡng thì cảnh báo, chờ duyệt hoặc chặn | `app/cost.py` |
 | SQL sai logic | Phân tích tĩnh 9 quy tắc; tự sửa lỗi thường gặp | `app/sqlcheck.py`, `app/repair.py` |
 | Bịa số khi giải thích | Lời giải thích chỉ chèn số qua chỗ giữ chỗ; mọi con số trong văn bản được đối chiếu lại với kết quả | `app/explain.py` |
-| Mô hình lỗi hoặc hết tiền | Rơi về bộ luật offline và báo rõ trên giao diện | `app/agent.py` |
+| Mô hình lỗi hoặc hết tiền | Báo lỗi rõ ràng, không đoán bằng bộ luật; câu bộ luật hiểu trọn vẹn vẫn trả lời được | `app/agent.py` |
+| Trả lời lạc đề, kế thừa nhầm câu trước | Router phân loại ý định và viết lại câu nối tiếp thành câu độc lập trước khi lập kế hoạch | `app/llm.py` (`route`) |
+| Bỏ qua một phần câu hỏi | Sau Planner, code đối chiếu mã/từ trong câu với kế hoạch; thiếu thì hỏi lại hoặc ghi rõ “chưa lọc” | `app/agent.py` (`_coverage_check`) |
+| Trả lời không đúng trọng tâm | Critic: code vá phần kế hoạch bỏ sót mà người dùng nêu rõ và đưa chỉ số được hỏi lên đầu; mô hình nhanh chấm kết quả, chưa đúng thì Planner làm lại một lần | `app/critic.py` |
 
 ## 2. Đường đi của một câu hỏi
 
@@ -29,9 +32,14 @@ Câu hỏi tiếng Việt
    │
    ▼
 2. Lập kế hoạch ........ theo thứ tự ưu tiên:
-   │                     a) chốt chặn bằng code: câu giới thiệu, câu đã có SQL xác nhận, từ nhiều nghĩa
-   │                     b) LLM gọi công cụ (nếu bật)
-   │                     c) bộ luật offline (nếu không có LLM hoặc LLM lỗi)
+   │                     a) chốt chặn bằng code: chủ đề cấm, câu giới thiệu, sửa/xóa dữ liệu, cột bị hạn chế, tra cứu mã
+   │                     b) đường nhanh: bộ luật hiểu TRỌN VẸN câu hỏi thì không gọi mô hình
+   │                     c) Router (model nhanh): ý định, câu hỏi độc lập, tách câu nhiều ý; Planner chạy đón trước
+   │                        song song trên câu gốc. Câu nhiều ý: mỗi ý chạy song song, trả lời thành nhiều khối
+   │                     d) SQL đã xác nhận, từ nhiều nghĩa, câu thiếu chỉ số: xử lý bằng code
+   │                     e) Planner: thường một lượt gọi (ngữ cảnh bảng/chỉ số đưa sẵn; code kiểm tra ngay lúc nộp),
+   │                        rồi code kiểm tra độ bao phủ của kế hoạch
+   │                     f) Critic (code): vá bộ lọc/kỳ/cách chia/top N người dùng nêu rõ mà kế hoạch bỏ sót
    │
    ├─► Hỏi lại ......... khi câu hỏi mơ hồ
    ├─► Trả lời thông tin  định nghĩa chỉ số, mô tả dữ liệu, “bạn là ai”
@@ -49,8 +57,11 @@ Câu hỏi tiếng Việt
 6. Chạy trên DuckDB .... kết nối chỉ đọc, có giới hạn thời gian
    ▼
 7. Giải thích .......... tính các “sự kiện” từ kết quả, viết lời, đối chiếu lại từng con số
+   ▼                     (câu đầu phải nói đúng chỉ số được hỏi, không thì dùng bản tự động)
+8. Critic chấm ......... mô hình nhanh đọc câu hỏi + kế hoạch + vài dòng kết quả (chạy song song với bước 7)
+   │                     chưa đúng: Planner lập lại kế hoạch một lần kèm nhận xét; hết thời gian: kèm cảnh báo
    ▼
-8. Ghi nhật ký, lưu ngữ cảnh, gợi ý câu hỏi tiếp
+9. Ghi nhật ký, lưu ngữ cảnh, gợi ý câu hỏi tiếp
 ```
 
 Toàn bộ luồng là một đồ thị trạng thái tự viết trong `app/agent.py` (mỗi bước là một nút, kết quả của nút quyết định
@@ -67,14 +78,16 @@ SQL. Nhờ vậy câu lệnh không phụ thuộc vào việc mô hình có nh�
 Doanh nghiệp mẫu ABC có 25 chỉ số, 24 chiều, 7 model. Hỗ trợ chỉ số suy diễn (tỷ lệ), chỉ số lấy từ nhiều bảng sự
 kiện, so sánh kỳ, và chỉ số không cộng được qua thời gian (tồn kho).
 
-### 3.2 Hai cách hiểu câu hỏi
+### 3.2 Hai đường hiểu câu hỏi
 
-| | LLM gọi công cụ | Bộ luật offline |
+| | Router + Planner (LLM) | Đường nhanh (bộ luật) |
 |---|---|---|
-| Cần | Khóa API, có mạng | Không cần gì |
-| Hiểu được | Câu tự do, kể cả ngoài semantic layer | Câu về chỉ số, chiều, thời gian đã khai báo |
-| Tốc độ | Khoảng 6–7 giây mỗi câu | Dưới 1 giây |
+| Dùng khi | Mọi câu bộ luật không hiểu trọn vẹn | Bộ luật dùng hết mọi từ có nghĩa, chỉ số nêu ngay trong câu |
+| Hiểu được | Câu tự do, câu nối tiếp, câu nhiều ý, kể cả ngoài semantic layer | Câu về chỉ số, chiều, thời gian đã khai báo |
+| Tốc độ | Router ~1,5–2 giây; thêm Planner ~5–9 giây | Dưới 1 giây |
 | File | `app/llm.py` | `app/nlu.py` |
+
+Không còn chế độ offline: câu bộ luật chỉ hiểu một phần không bao giờ được trả lời bằng phỏng đoán của bộ luật.
 
 LLM không được trả lời trực tiếp. Nó được cấp 6 công cụ và phải nộp kết quả qua công cụ cuối:
 
@@ -134,6 +147,14 @@ Dùng cho câu hỏi “vì sao … tăng/giảm”. Các bước trong `app/ins
 4. Kiểm định xem có phải lỗi dữ liệu không. Với gói bán lẻ: kiểm định Kolmogorov–Smirnov phát hiện đơn giá bị ghi
    sai đơn vị, đối chiếu tồn kho để phát hiện hết hàng, đối chiếu lịch đóng cửa hàng và lịch khuyến mãi.
 
+5. Giả thuyết do mô hình nêu, code kiểm chứng. Khi đã có bức tranh phân rã, mô hình nhanh được gọi song song với bước 3–4
+   để nêu tối đa 3 giả thuyết dạng “chỉ số X ở phân khúc Y (1–2 chiều) giảm/tăng”, chỉ được dùng chỉ số, chiều và giá
+   trị có thật (danh sách lấy từ semantic layer; doanh nghiệp khai thêm chỉ số ở `analysis.hypothesis_metrics`). Code
+   chạy một truy vấn cho mỗi giả thuyết và chấm: **xác nhận** (đúng chiều và đủ lớn: phân khúc giải thích ≥ 20% biến
+   động, hoặc chỉ số khác thay đổi ≥ 5%), **yếu**, **bác bỏ** (ngược chiều), **chưa kiểm được**. Lời giải thích chỉ nhắc
+   giả thuyết được xác nhận, bằng số do code tính, nên vẫn qua bước đối chiếu số liệu. Mô hình mất khoảng 5 giây cho
+   lượt này, nên chỉ gọi khi còn ít nhất 5 giây trong ngân sách và bỏ giả thuyết về muộn. Tắt được trong Cài đặt.
+
 Kết luận phân biệt *nguyên nhân kinh doanh* với *lỗi dữ liệu*.
 
 ### 3.9 Chất lượng dữ liệu
@@ -173,13 +194,14 @@ DuckDB bất kỳ và sinh bản nháp sáu file này.
 | `app/semantic.py`, `app/catalog.py`, `app/profile.py` | Đọc cấu hình doanh nghiệp, biên dịch SQL |
 | `app/governance.py`, `app/cost.py`, `app/sqlcheck.py`, `app/repair.py` | Các chốt chặn quanh SQL |
 | `app/explain.py`, `app/insights.py`, `app/dq.py`, `app/lineage.py` | Giải thích, nguyên nhân, chất lượng, nguồn gốc dữ liệu |
-| `app/evals.py`, `eval/questions.json` | Đo độ đúng |
+| `app/evals.py`, `eval/questions.json` | Đo độ đúng từng câu (so kết quả chạy với SQL đáp án) |
+| `app/conv_eval.py`, `eval/conversations.json` | Eval hội thoại nhiều lượt: kiểm tra bằng code + mô hình chấm, so sánh bật/tắt tính năng |
 | `app/onboard.py` | Nhận kho dữ liệu mới |
 | `config/` | Cấu hình của doanh nghiệp mẫu ABC |
 | `workspaces/giaovan_xyz/` | Doanh nghiệp mẫu thứ hai |
 | `warehouse/` | Sinh dữ liệu giả và dựng kho của ABC |
 | `web/` | Giao diện |
-| `tests/` | 141 kiểm thử tự động |
+| `tests/` | 298 kiểm thử tự động |
 | `var/` | Dữ liệu sinh ra khi chạy (không đưa lên git) |
 
 ## 6. Cách đo độ đúng
@@ -196,12 +218,27 @@ Kết quả đo ngày 12/11/2026, mỗi cấu hình một lượt chạy:
 
 Đo lại sau khi làm lại giao diện (cùng ngày) cho cùng số câu đúng ở bộ luật offline và `gpt-6-luna`.
 
+### Eval hội thoại
+
+Bộ câu hỏi đơn chỉ đo “đúng số”. Bộ `eval/conversations.json` (20 kịch bản, 28 lượt) đo “đúng ý” qua nhiều lượt: câu
+nhiều ý, câu nối tiếp, hỏi lại khi mơ hồ, lạc đề, phân quyền theo dòng, chờ duyệt, câu “vì sao”. Mỗi lượt chạy qua
+đường đi thật của người dùng và được chấm hai cách độc lập:
+
+- **Kiểm tra bằng code** theo kỳ vọng viết sẵn: loại câu trả lời, số ý, chỉ số / chiều / bộ lọc / kỳ trong kế hoạch,
+  chữ phải có hoặc không được có, số dòng, thời gian.
+- **Mô hình chấm**: đọc lịch sử hội thoại, kế hoạch, lời trả lời, ghi chú và phạm vi tài khoản, rồi chấm “ok” / “wrong”
+  theo tiêu chí trúng trọng tâm, đủ ý, đúng ngữ cảnh, không lạc đề.
+
+Lượt đạt khi qua cả hai. Báo cáo đếm riêng số lượt hai bên chấm khác nhau: đó là chỗ kiểm tra code còn hở hoặc mô hình
+chấm sai, cần người xem. `python -m app.conv_eval --ablation` (hoặc nút “So sánh bật/tắt tính năng”) chạy lại bộ kịch
+bản với từng tính năng bị tắt để thấy mỗi tính năng đóng góp gì.
+
 ## 7. Giới hạn cần biết
 
 - **Các con số trên lạc quan.** Bộ câu hỏi do người xây hệ thống viết và đã được dùng để sửa lỗi. Chưa có bộ câu hỏi
   độc lập, chưa chạy lặp nhiều lần để biết dao động.
-- Con số của chế độ LLM chỉ có nghĩa khi câu đó thật sự do LLM trả lời. Ở lượt đo lại trên XYZ có 1/26 câu LLM lỗi
-  và bộ luật trả lời thay.
+- Từ 15/11/2026 không còn chuyện bộ luật trả lời thay khi LLM lỗi: câu đó được tính là sai. Kết quả eval ghi đường đi
+  (`path`: nhanh hay qua LLM) của từng câu.
 - Chế độ Claude chưa được đo vì chưa có khóa; mới kiểm bằng client giả.
 - Giao diện mới được kiểm bằng ảnh chụp tự động, chưa có người dùng thật thử.
 - Kho phải là DuckDB; chiều thời gian phải mang tên `ngay, tuan, thang, quy, nam`; đổi doanh nghiệp phải khởi động
