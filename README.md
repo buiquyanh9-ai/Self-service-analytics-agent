@@ -35,6 +35,8 @@ nằm ở mục **Công cụ** cột trái.
 Yêu cầu: Python ≥ 3.11.
 
 ```powershell
+git clone https://github.com/buiquyanh9-ai/Self-service-analytics-agent.git
+cd Self-service-analytics-agent
 pip install -r requirements.txt
 .\run.ps1                 # lần đầu tự sinh dữ liệu giả (~1 phút) rồi mở server
 # hoặc: ./run.sh  (Linux/macOS/Git Bash)
