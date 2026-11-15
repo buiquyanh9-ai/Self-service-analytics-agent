@@ -50,12 +50,26 @@ CTX = {"anchor": "2026-11-09", "role": "analyst", "rls": {}, "memory": {}, "fews
 def test_mode_resolution(monkeypatch):
     monkeypatch.setattr(llm, "credentials_available", lambda: False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    assert llm.resolve_mode({"llm_mode": "auto"}) == "offline"
-    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-    assert llm.resolve_mode({"llm_mode": "auto"}) == "openrouter"
-    assert llm.resolve_mode({"llm_mode": "offline"}) == "offline"
+    assert llm.resolve_mode({"llm_mode": "auto"}) == llm.NO_LLM          # không còn chế độ offline
     monkeypatch.setattr(llm, "credentials_available", lambda: True)
     assert llm.resolve_mode({"llm_mode": "auto"}) == "claude"
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    assert llm.resolve_mode({"llm_mode": "auto"}) == "openrouter"         # OpenRouter được ưu tiên khi có cả hai
+    assert llm.resolve_mode({"llm_mode": "offline"}) == "openrouter"      # giá trị cũ lưu trong cài đặt = auto
+    assert llm.resolve_mode({"llm_mode": "claude"}) == "claude"
+
+
+def test_router_uses_fast_model_by_default(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.delenv("ROUTER_MODEL", raising=False)
+    assert llm.router_model({}, "openrouter") == llm.ROUTER_DEFAULT_MODEL
+    assert llm.router_model({"router_model": "google/x-flash"}, "openrouter") == "google/x-flash"
+
+
+def test_route_output_is_normalised():
+    r = llm.normalize_route({"intent": "bogus", "standalone_question": " ", "tasks": ["", "a"]}, "câu gốc")
+    assert r["intent"] == "data" and r["standalone_question"] == "câu gốc" and r["tasks"] == ["a"]
+    assert llm.normalize_route({}, "q")["tasks"] == ["q"]
 
 
 def test_model_name_for_openrouter(client, monkeypatch):
@@ -152,3 +166,28 @@ def test_repair_sql_requires_sql(client, monkeypatch):
     assert client.repair_sql("SELEC 1", [], "", "q") == {"sql": "SELECT 1", "explanation": "sửa tên cột"}
     with pytest.raises(llm.LLMError):
         client.repair_sql("SELEC 1", [], "", "q")
+
+
+def test_submit_is_checked_and_rejected_back_into_the_same_conversation(client, monkeypatch):
+    """Planner nộp thẳng kế hoạch; kiểm tra khi nộp báo lỗi thì mô hình sửa ngay trong hội thoại (không cần lượt biên dịch thử)."""
+    bad = {"intent": "metric_query", "kind": "semantic", "semantic_plan": {"metrics": ["khong_co"]}}
+    good = {"intent": "metric_query", "kind": "semantic", "semantic_plan": {"metrics": ["doanh_thu_thuan"]}}
+    http = FakeHTTP([_msg(tool_calls=[_call("submit_answer", bad)]), _msg(tool_calls=[_call("submit_answer", good, "c2")])])
+    monkeypatch.setattr(llm.urllib.request, "urlopen", http)
+    check = lambda ans: "Lỗi: chỉ số khong_co không tồn tại" if ans["semantic_plan"]["metrics"] == ["khong_co"] else None
+    out = client.plan("?", CTX, {}, check=check)
+    assert out["semantic_plan"]["metrics"] == ["doanh_thu_thuan"] and len(http.requests) == 2
+    assert "khong_co không tồn tại" in http.requests[1]["messages"][-1]["content"]
+
+
+def test_submit_check_gives_up_after_two_rejections(client, monkeypatch):
+    sub = {"intent": "metric_query", "kind": "semantic", "semantic_plan": {"metrics": ["x"]}}
+    http = FakeHTTP([_msg(tool_calls=[_call("submit_answer", sub, f"c{i}")]) for i in range(3)])
+    monkeypatch.setattr(llm.urllib.request, "urlopen", http)
+    out = client.plan("?", CTX, {}, check=lambda ans: "sai")
+    assert out["semantic_plan"]["metrics"] == ["x"] and len(http.requests) == 3     # lần 3 nhận, pipeline kiểm duyệt tiếp
+
+
+def test_linked_schema_is_in_the_planner_message():
+    msg = llm.user_message("?", dict(CTX, schema="TABLE dw.fct_dh (10 dòng)"))
+    assert "đã tra sẵn" in msg and "TABLE dw.fct_dh" in msg

@@ -90,12 +90,22 @@ def profile() -> dict:
 
 
 DEFAULT_SETTINGS = {
-    # chế độ LLM: auto (Claude nếu có credentials, kế đến OpenRouter nếu có key, ngược lại offline), claude, openrouter, offline
+    # nhà cung cấp mô hình: auto (OpenRouter nếu có OPENROUTER_API_KEY, kế đến Claude), openrouter, claude. Không còn offline.
     "llm_mode": os.environ.get("LLM_MODE", "auto"),
     "llm_model": os.environ.get("LLM_MODEL", "claude-opus-5-5"),
     "llm_effort": os.environ.get("LLM_EFFORT", "medium"),
+    "router_model": os.environ.get("ROUTER_MODEL", ""),   # trống = llm.ROUTER_DEFAULT_MODEL (model nhanh)
     "max_repair_attempts": 3,
     "query_timeout_s": 20,
+    "fast_path": True,            # câu bộ luật hiểu trọn vẹn thì trả lời không cần LLM
+    "latency_budget_s": 10,       # thời gian chờ mục tiêu mỗi câu (giây): quá ngân sách thì bỏ lượt LLM viết lời
+    "speculative_plan": True,     # Planner chạy đón trước song song với Router (dùng nếu Router không viết lại câu hỏi)
+    "multi_task": True,           # câu nhiều ý: trả lời song song mọi ý (tối đa 4) thay vì chỉ ý đầu
+    "variance_hypotheses": True,  # câu "vì sao": mô hình nêu giả thuyết nguyên nhân, code chạy truy vấn kiểm chứng từng cái
+    "critic": True,               # tác tử kiểm tra: đối chiếu kế hoạch với câu hỏi bằng code (vá phần bị bỏ sót)
+    "critic_llm": True,           # ... và LLM chấm kết quả của Planner (chạy song song với lượt viết lời)
+    "critic_revise": True,        # LLM chấm "chưa đúng" thì Planner lập lại kế hoạch một lần
+    "critic_revise_until_s": 6,   # chỉ chấm (và lập lại) nếu lúc có kết quả câu hỏi mới tốn chưa tới từng này giây
     "always_review": False,            # luôn yêu cầu duyệt SQL trước khi chạy
     "fewshot_k": 4,
     "fewshot_reuse_threshold": 0.8,    # Jaccard tối thiểu để tái sử dụng SQL đã xác nhận (kèm điều kiện trùng slot số/thời gian)
