@@ -82,7 +82,8 @@ def run_eval(split: str = "all", mode: str | None = None, label: str | None = No
              "split": q.get("split"), "tags": q.get("tags", []), "pred_type": resp.get("type"), "pred_sql": resp.get("sql"),
              "pred_source": resp.get("sql_source"), "gold_sql": q.get("gold_sql"), "latency_ms": latency,
              "retries": len(resp.get("repairs") or []), "bytes": (resp.get("cost") or {}).get("total_bytes"),
-             "audit_ok": (resp.get("audit") or {}).get("ok"), "error": resp.get("error")}
+             "audit_ok": (resp.get("audit") or {}).get("ok"), "error": resp.get("error"), "path": resp.get("path"),
+             "route": (resp.get("route") or {}).get("intent"), "critic": resp.get("critic")}
         exp = q.get("expect", "result")
         if exp == "clarify":
             d["correct"] = resp.get("type") == "clarification"

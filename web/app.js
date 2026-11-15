@@ -1,13 +1,15 @@
-/* DATA-01 · giao diện thử nghiệm (vanilla JS + Chart.js) */
+/* Trợ lý dữ liệu (vanilla JS + Chart.js)
+ * Một cột hỏi đáp: kết quả trước, cách tính để trong ngăn bên, từ điển chỉ số luôn mở được.
+ * Các trang công cụ và quản trị (dữ liệu, SQL, nhật ký, chất lượng dữ liệu, nguồn gốc, đo độ chính xác, cài đặt) ở tools.js. */
 "use strict";
 
-const S = { token: null, user: null, cfg: null, view: "chat", conv: null, convs: [], charts: [] };
+const S = { token: null, user: null, cfg: null, conv: null, convs: [], charts: [], busy: false, page: null };
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
-  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) { /* ignore */ } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) { /* bỏ qua */ } },
 };
 
-// ------------------------------------------------------------------ DOM helpers
+// ------------------------------------------------------------------ tiện ích DOM
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -25,35 +27,29 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 const $ = (sel, root = document) => root.querySelector(sel);
-function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function md(s) {
-  let t = esc(s || "");
-  t = t.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
-  const lines = t.split("\n");
+  let t = esc(s || "").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
   let out = "", inList = false;
-  for (const ln of lines) {
+  for (const ln of t.split("\n")) {
     if (/^\s*- /.test(ln)) { if (!inList) { out += "<ul>"; inList = true; } out += "<li>" + ln.replace(/^\s*- /, "") + "</li>"; }
     else { if (inList) { out += "</ul>"; inList = false; } out += ln ? ln + "<br>" : "<br>"; }
   }
   if (inList) out += "</ul>";
   return out.replace(/(<br>)+$/, "");
 }
-function toast(msg, ms = 2600) {
-  const t = h("div", { class: "toast" }, msg);
-  document.body.append(t);
-  setTimeout(() => t.remove(), ms);
-}
-function modal(title, body, actions = []) {
-  const bg = h("div", { class: "modal-bg", onclick: e => { if (e.target === bg) bg.remove(); } });
-  const close = () => bg.remove();
-  bg.append(h("div", { class: "card modal" },
-    h("div", { class: "hd" }, h("b", { class: "grow" }, title), h("button", { class: "btn sm", onclick: close }, "Đóng")),
-    h("div", { class: "bd" }, body),
-    actions.length ? h("div", { class: "bd row", style: { justifyContent: "flex-end", borderTop: "1px solid var(--border)" } }, actions.map(a => a(close))) : null));
-  document.body.append(bg);
-  return close;
-}
-function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function toast(msg, ms = 2400) { const t = h("div", { class: "toast" }, msg); document.body.append(t); setTimeout(() => t.remove(), ms); }
+const ICON = {
+  menu: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+  send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  book: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>',
+  moon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+  sun: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  help: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></svg>',
+  logo: '<svg width="18" height="18" viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9" rx="1" fill="#2a78d6"/><rect x="10" y="7" width="4" height="14" rx="1" fill="#eb6834"/><rect x="17" y="3" width="4" height="18" rx="1" fill="#1baf7a"/></svg>',
+};
+const icon = (name, cls = "") => h("span", { class: cls, html: ICON[name], "aria-hidden": "true", style: { display: "inline-grid" } });
 
 // ------------------------------------------------------------------ API
 async function api(path, opts = {}) {
@@ -75,20 +71,14 @@ const nf2 = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2, minimumFr
 const nfa = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 });
 function fmtCompact(x, f) {
   if (x == null || isNaN(x)) return "—";
-  if (f === "currency") {
-    const a = Math.abs(x);
-    if (a >= 1e9) return nf2.format(x / 1e9) + " tỷ ₫";
-    if (a >= 1e6) return nf1.format(x / 1e6) + " tr ₫";
-    return nf0.format(x) + " ₫";
-  }
+  if (f === "currency") { const a = Math.abs(x); if (a >= 1e9) return nf2.format(x / 1e9) + " tỷ ₫"; if (a >= 1e6) return nf1.format(x / 1e6) + " tr ₫"; return nf0.format(x) + " ₫"; }
   if (f === "percent") return nf1.format(x) + "%";
   if (f === "ratio") return nf2.format(x);
   return Number.isInteger(x) ? nf0.format(x) : nfa.format(x);
 }
 function fmtAxis(x, f) {
   if (f === "currency") { const a = Math.abs(x); if (a >= 1e9) return nfa.format(x / 1e9) + " tỷ"; if (a >= 1e6) return nfa.format(x / 1e6) + " tr"; return nf0.format(x); }
-  if (f === "percent") return nfa.format(x) + "%";
-  return nfa.format(x);
+  return f === "percent" ? nfa.format(x) + "%" : nfa.format(x);
 }
 function fmtCell(v, f) {
   if (v == null) return "—";
@@ -98,32 +88,34 @@ function fmtCell(v, f) {
   if (f === "ratio") return nf2.format(v);
   return Number.isInteger(v) ? nf0.format(v) : nfa.format(v);
 }
-function fmtBytes(n) {
-  n = Number(n || 0);
-  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return (i ? nf1.format(n) : nf0.format(n)) + " " + u[i];
+function fmtBytes(n) { n = Number(n || 0); const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i ? nf1.format(n) : nf0.format(n)) + " " + u[i]; }
+// "tháng M/YYYY" của tháng gần nhất có đủ dữ liệu (tháng chứa ngày mới nhất mà chưa hết tháng thì lùi một tháng),
+// dùng cho các câu "Hỏi thử" để con số không bị thấp bất thường vì tháng mới có dữ liệu được vài ngày
+function anchorMonth() {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(S.cfg.anchor || ""); if (!m) return "";
+  let y = +m[1], mo = +m[2];
+  if (+m[3] < new Date(y, mo, 0).getDate()) { mo -= 1; if (!mo) { mo = 12; y -= 1; } }
+  return `tháng ${mo}/${y}`;
 }
-function fmtTime(ts) { const d = new Date(ts * 1000); return d.toLocaleString("vi-VN"); }
+// Tên gọi trong lời chào: tên người thật (mọi chữ viết hoa đầu, 2–4 chữ) thì lấy chữ cuối ("Nguyễn Văn An" → "An");
+// tên vai trò như "Quản trị dữ liệu", "Chuyên viên (toàn quốc)" thì gọi "bạn"
+function callName(u) {
+  const w = (u.full_name || "").trim().split(/\s+/).filter(Boolean);
+  const person = w.length >= 2 && w.length <= 4 && w.every(x => /^\p{Lu}\p{Ll}*$/u.test(x));
+  return person ? w[w.length - 1] : "bạn";
+}
+const metricByName = n => (S.cfg.metrics || []).find(m => m.name === n);
 
-// ------------------------------------------------------------------ biểu đồ
-function seriesColors() { return [1, 2, 3, 4, 5, 6, 7, 8].map(i => cssVar("--series-" + i)); }
+// ------------------------------------------------------------------ biểu đồ & bảng
 function renderChart(container, spec) {
-  if (!spec) return;
-  if (spec.type === "kpi") {
-    container.append(h("div", { class: "kpis", style: { marginTop: "12px" } }, spec.items.map(it =>
-      h("div", { class: "kpi" }, h("div", { class: "l" }, it.label), h("div", { class: "v" }, fmtCompact(it.value, it.format)),
-        it.delta_pct != null ? h("div", { class: "d" }, (it.delta_pct >= 0 ? "▲ +" : "▼ ") + nf1.format(it.delta_pct) + "% so với " + (it.prev_label || "kỳ trước") + " (" + fmtCompact(it.prev, it.format) + ")") : null))));
-    return;
-  }
-  if (typeof Chart === "undefined") { container.append(h("div", { class: "callout warn" }, "Không tải được thư viện biểu đồ (Chart.js) — xem bảng dữ liệu.")); return; }
-  const colors = seriesColors();
+  if (!spec || spec.type === "kpi") return;
+  if (typeof Chart === "undefined") { container.append(h("div", { class: "note warn" }, "Không tải được thư viện biểu đồ, hãy xem dạng bảng.")); return; }
+  const colors = [1, 2, 3, 4, 5, 6, 7, 8].map(i => cssVar("--series-" + i));
   const n = spec.labels.length;
-  const hgt = spec.horizontal ? Math.max(260, Math.min(900, n * 26 + 70)) : 300;
-  const box = h("div", { class: "chart-box", style: { height: hgt + "px" } });
+  const box = h("div", { class: "chart-box", style: { height: (spec.horizontal ? Math.max(240, Math.min(900, n * 28 + 70)) : 300) + "px" } });
   const cv = h("canvas", { role: "img", "aria-label": spec.title || "Biểu đồ" });
   box.append(cv);
-  if (spec.title) container.append(h("div", { class: "sec", style: { marginTop: "12px", fontWeight: 600, fontSize: "13px" } }, spec.title));
+  if (spec.title) container.append(h("div", { class: "chart-t" }, spec.title));
   container.append(box);
   const surface = cssVar("--surface-1"), grid = cssVar("--grid"), muted = cssVar("--text-muted"), sec = cssVar("--text-secondary");
   const isLine = spec.type === "line", isPie = spec.type === "doughnut";
@@ -133,16 +125,13 @@ function renderChart(container, spec) {
     let col = colors[i % 8];
     if (d.role === "previous") col = cssVar("--series-muted");
     if (d.role === "current") col = colors[0];
-    if (isLine) return Object.assign(base, { borderColor: col, backgroundColor: col, borderWidth: 2, pointRadius: n <= 24 ? 3 : 0,
-      pointHoverRadius: 5, pointBorderColor: surface, pointBorderWidth: 2, tension: 0, spanGaps: true });
+    if (isLine) return Object.assign(base, { borderColor: col, backgroundColor: col, borderWidth: 2, pointRadius: n <= 24 ? 3 : 0, pointHoverRadius: 5, pointBorderColor: surface, pointBorderWidth: 2, tension: 0, spanGaps: true });
     const bg = d.role === "delta" ? d.data.map(v => (v >= 0 ? cssVar("--pos") : cssVar("--neg"))) : col;
-    return Object.assign(base, { backgroundColor: bg, borderRadius: 4, borderSkipped: "start", maxBarThickness: 28,
-      categoryPercentage: 0.72, barPercentage: 0.9, borderColor: surface, borderWidth: spec.stacked ? { top: 2 } : 0 });
+    return Object.assign(base, { backgroundColor: bg, borderRadius: 4, borderSkipped: "start", maxBarThickness: 28, categoryPercentage: 0.72, barPercentage: 0.9, borderColor: surface, borderWidth: spec.stacked ? { top: 2 } : 0 });
   });
-  const valAxis = { grid: { color: grid, drawTicks: false }, border: { display: false },
-    ticks: { color: muted, padding: 6, callback: v => fmtAxis(v, spec.format) }, stacked: !!spec.stacked, beginAtZero: !isLine };
+  const valAxis = { grid: { color: grid, drawTicks: false }, border: { display: false }, ticks: { color: muted, padding: 6, callback: v => fmtAxis(v, spec.format) }, stacked: !!spec.stacked, beginAtZero: !isLine };
   const catAxis = { grid: { display: false }, border: { color: grid }, ticks: { color: muted, autoSkip: true, maxRotation: 0 }, stacked: !!spec.stacked };
-  const ch = new Chart(cv, {
+  S.charts.push(new Chart(cv, {
     type: isPie ? "doughnut" : (isLine ? "line" : "bar"),
     data: { labels: spec.labels, datasets },
     options: {
@@ -150,820 +139,509 @@ function renderChart(container, spec) {
       indexAxis: spec.horizontal ? "y" : "x", cutout: isPie ? "62%" : undefined,
       interaction: isPie ? { mode: "nearest", intersect: true } : { mode: "index", intersect: false },
       plugins: {
-        legend: { display: isPie || datasets.length > 1, position: isPie ? "right" : "top", align: "start",
-          labels: { color: sec, usePointStyle: true, pointStyle: "rectRounded", boxWidth: 10, boxHeight: 10 } },
-        tooltip: { backgroundColor: cssVar("--surface-1"), titleColor: cssVar("--text-primary"), bodyColor: sec,
-          borderColor: cssVar("--border"), borderWidth: 1, padding: 10, usePointStyle: true,
+        legend: { display: isPie || datasets.length > 1, position: isPie ? "right" : "top", align: "start", labels: { color: sec, usePointStyle: true, pointStyle: "rectRounded", boxWidth: 10, boxHeight: 10 } },
+        tooltip: { backgroundColor: surface, titleColor: cssVar("--text-primary"), bodyColor: sec, borderColor: cssVar("--border"), borderWidth: 1, padding: 10, usePointStyle: true,
           callbacks: { label: c => ` ${c.dataset.label}: ${fmtCompact(isPie ? c.parsed : (spec.horizontal ? c.parsed.x : c.parsed.y), spec.format)}` } },
       },
       scales: isPie ? {} : (spec.horizontal ? { x: valAxis, y: catAxis } : { x: catAxis, y: valAxis }),
     },
-  });
-  S.charts.push(ch);
+  }));
 }
-
+function kpiTiles(spec) {
+  return h("div", { class: "kpis" }, spec.items.map(it => h("div", { class: "kpi" },
+    h("div", { class: "l" }, it.label), h("div", { class: "v" }, fmtCompact(it.value, it.format)),
+    it.delta_pct != null ? h("div", { class: "d " + (it.delta_pct >= 0 ? "up" : "down") },
+      (it.delta_pct >= 0 ? "▲ +" : "▼ ") + nf1.format(it.delta_pct) + "% so với " + (it.prev_label || "kỳ trước") + " (" + fmtCompact(it.prev, it.format) + ")") : null)));
+}
 function dataTable(columns, rows, meta, highlights) {
   const mm = {}; (meta || []).forEach(m => (mm[m.name] = m));
-  const hl = {}; (highlights || []).forEach(x => (hl[x.row] = x.type === "down" ? "hl-down" : x.type === "up" ? "hl-up" : "hl-up"));
+  const hl = {}; (highlights || []).forEach(x => (hl[x.row] = x.type === "down" ? "hl-down" : "hl-up"));
   return h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
     h("thead", {}, h("tr", {}, columns.map(c => h("th", { title: c, class: (mm[c] || {}).kind === "metric" ? "num" : "" }, (mm[c] && mm[c].label) || c)))),
-    h("tbody", {}, rows.slice(0, 500).map((r, i) => h("tr", { class: hl[i] || "" }, r.map((v, j) => {
-      const m = mm[columns[j]] || {};
-      return h("td", { class: typeof v === "number" ? "num" : "" }, fmtCell(v, m.format));
-    }))))));
+    h("tbody", {}, rows.slice(0, 500).map((r, i) => h("tr", { class: hl[i] || "" }, r.map((v, j) => h("td", { class: typeof v === "number" ? "num" : "" }, fmtCell(v, (mm[columns[j]] || {}).format))))))));
 }
 function downloadCSV(columns, rows, name = "ket_qua.csv") {
   const q = v => (v == null ? "" : /[",\n;]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
-  const csv = "﻿" + [columns.map(q).join(","), ...rows.map(r => r.map(q).join(","))].join("\n");
-  const a = h("a", { href: URL.createObjectURL(new Blob([csv], { type: "text/csv" })), download: name });
+  const a = h("a", { href: URL.createObjectURL(new Blob(["﻿" + [columns.map(q).join(","), ...rows.map(r => r.map(q).join(","))].join("\n")], { type: "text/csv" })), download: name });
   document.body.append(a); a.click(); a.remove();
 }
 function codeBlock(text) {
   return h("div", { class: "code" }, h("button", { class: "btn sm copy", onclick: () => { navigator.clipboard && navigator.clipboard.writeText(text); toast("Đã sao chép"); } }, "Sao chép"), h("pre", {}, text));
 }
-function tabs(defs) {
-  const bar = h("div", { class: "tabs" }); const pane = h("div", { class: "tabpane" });
-  const items = defs.filter(Boolean);
-  let active = -1;
-  const show = i => {
-    if (active === i) { active = -1; pane.innerHTML = ""; [...bar.children].forEach(b => b.classList.remove("active")); return; }
-    active = i; pane.innerHTML = "";
-    [...bar.children].forEach((b, k) => b.classList.toggle("active", k === i));
-    pane.append(items[i].render());
+
+// ------------------------------------------------------------------ ngăn bên
+function drawer(title, body) {
+  closeDrawer();
+  const bg = h("div", { class: "drawer-bg", id: "drawer-bg", onclick: closeDrawer });
+  const d = h("aside", { class: "drawer", id: "drawer", role: "dialog", "aria-label": title },
+    h("div", { class: "drawer-hd" }, h("b", {}, title), h("button", { class: "btn sm", onclick: closeDrawer }, "Đóng")),
+    h("div", { class: "drawer-bd" }, body));
+  document.body.append(bg, d);
+  return d;
+}
+function closeDrawer() { ["#drawer", "#drawer-bg"].forEach(s => { const e = $(s); e && e.remove(); }); }
+document.addEventListener("keydown", e => { if (e.key === "Escape") { closeDrawer(); const m = $(".modal-bg"); m && m.remove(); } });
+
+// Từ điển chỉ số: các từ dễ nhầm lên đầu, sau đó toàn bộ chỉ số, có ô tìm
+function openGlossary(focus) {
+  const p = S.cfg.profile || {}, month = anchorMonth();
+  const list = h("div", {});
+  const tryChip = m => h("button", { class: "chip", onclick: () => { closeDrawer(); send(m.label + (month ? " " + month : "")); } }, "Hỏi thử: " + m.label + (month ? " " + month : ""));
+  const termRow = m => h("div", { class: "term" + (m.name === focus ? " hit" : ""), id: "term-" + m.name },
+    h("div", { class: "hd" }, h("b", {}, m.label), m.owner ? h("span", { class: "pill" }, m.owner) : null),
+    m.description ? h("div", { class: "desc" }, m.description) : null, tryChip(m));
+  const draw = q => {
+    const nq = norm(q);
+    const all = (S.cfg.metrics || []).filter(m => !nq || norm(m.label + " " + m.name + " " + (m.description || "") + " " + (m.owner || "")).includes(nq));
+    const conf = !nq ? (p.confusable_terms || []) : [];
+    list.replaceChildren(...[      // replaceChildren không tự làm phẳng mảng: phải trải ra từng phần tử
+      conf.map(t => [h("h4", {}, "Dễ nhầm: “" + t.term + "” có " + t.options.length + " cách tính"), compareCards(t, false)]),
+      h("h4", {}, nq ? `Kết quả tìm (${all.length})` : `Tất cả chỉ số (${all.length})`),
+      all.length ? all.map(termRow) : h("div", { class: "muted" }, "Không có chỉ số nào khớp."),
+    ].flat(Infinity));
   };
-  items.forEach((d, i) => bar.append(h("button", { onclick: () => show(i) }, d.label)));
-  return h("div", {}, bar, pane);
+  const search = h("input", { type: "search", placeholder: "Tìm chỉ số, ví dụ: lợi nhuận, trả hàng, tồn kho…", oninput: e => draw(e.target.value) });
+  const d = drawer("Từ điển chỉ số", [h("div", { class: "sec small", style: { marginBottom: "10px" } },
+    "Mỗi chỉ số có một định nghĩa thống nhất trong công ty. Gõ đúng tên chỉ số trong câu hỏi thì trợ lý trả lời ngay, không phải hỏi lại."), search, h("div", { style: { marginTop: "6px" } }, list)]);
+  draw("");
+  if (focus) { const t = $("#term-" + focus, d); t && t.scrollIntoView({ block: "center" }); } else search.focus();
 }
-function sevIcon(sev) {
-  const m = { critical: ["!", "Nghiêm trọng"], warning: ["!", "Cảnh báo"], info: ["i", "Thông tin"], ok: ["✓", "Ổn"], error: ["!", "Lỗi"] };
-  const [ic, lab] = m[sev] || m.info;
-  return h("span", { class: "sev " + (sev === "error" ? "critical" : sev) }, h("span", { class: "ic" }, ic), lab);
+function norm(s) { return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d"); }
+
+// Thẻ so sánh các cách tính của một từ dễ nhầm; thẻ đầu tiên là cách được khuyên dùng
+function compareCards(t, withTry = true) {
+  const month = anchorMonth();
+  return h("div", { class: "compare" }, t.options.map((o, i) => h("div", { class: "cmp" + (i === 0 ? " rec" : "") },
+    h("div", { class: "hd" }, h("b", {}, o.label), o.owner ? h("span", { class: "pill" }, o.owner) : null, i === 0 ? h("span", { class: "pill info" }, "Khuyên dùng") : null),
+    o.hint ? h("div", { class: "hint" }, o.hint) : null,
+    h("div", { class: "desc" }, o.description),
+    withTry ? h("button", { class: "chip", onclick: () => send(o.label + (month ? " " + month : "")) }, "Hỏi thử: " + o.label.toLowerCase() + (month ? " " + month : "")) : null)));
 }
 
-// ------------------------------------------------------------------ hiển thị câu trả lời
-const SRC_LABEL = { semantic: "Semantic layer", "semantic+repair": "Semantic + tự sửa", llm: "LLM sinh SQL", fewshot: "Few-shot đã xác nhận", user: "SQL người dùng", user_edit: "SQL đã chỉnh sửa" };
-
-function metaBadges(r) {
-  const b = [];
-  b.push(h("span", { class: "badge" }, r.mode === "claude" ? "🤖 Claude" : r.mode === "openrouter" ? "🤖 OpenRouter" : "⚙️ Offline NLU"));
-  if (r.sql_source) b.push(h("span", { class: "badge info" }, SRC_LABEL[r.sql_source] || r.sql_source));
-  if (r.cost && r.cost.human) b.push(h("span", { class: "badge " + (r.cost.level === "warn" ? "warn" : "") }, "Quét ~" + r.cost.human));
-  if (r.audit) b.push(h("span", { class: "badge " + (r.audit.ok ? "ok" : "err"), title: "Mọi con số trong diễn giải được tái tính từ kết quả truy vấn" },
-    r.audit.ok ? `✓ ${r.audit.facts_matched}/${r.audit.facts_checked} số liệu khớp kết quả` : "✗ Số liệu chưa kiểm chứng"));
-  if (r.row_count != null) b.push(h("span", { class: "badge" }, nf0.format(r.row_count) + " dòng" + (r.truncated ? " (đã cắt)" : "")));
-  if (r.repairs && r.repairs.length) b.push(h("span", { class: "badge warn" }, "🔧 Tự sửa " + r.repairs.length + " lần"));
-  if (r.approved_by) b.push(h("span", { class: "badge ok" }, "Duyệt bởi " + r.approved_by));
-  if (r.validation && r.validation.rls_applied && r.validation.rls_applied.length) b.push(h("span", { class: "badge info", title: r.validation.rls_applied.join(", ") }, "🔒 RLS"));
-  b.push(h("span", { class: "badge" }, nf0.format(r.elapsed_ms || 0) + " ms"));
-  return h("div", { class: "meta" }, b);
-}
-function callouts(r) {
-  const out = [];
-  if (r.assumptions && r.assumptions.length) out.push(h("div", { class: "callout info" }, h("span", {}, "ℹ️"), h("div", {}, h("b", {}, "Giả định: "), h("ul", {}, r.assumptions.map(a => h("li", {}, a))))));
-  if (r.notes && r.notes.length) out.push(h("div", { class: "callout info" }, h("span", {}, "📝"), h("ul", {}, r.notes.map(a => h("li", {}, a)))));
-  const lint = (r.lint || []).filter(l => l.severity !== "info");
-  if (lint.length) out.push(h("div", { class: "callout warn" }, h("span", {}, "⚠️"), h("div", {}, h("b", {}, "Phân tích tĩnh SQL: "),
-    h("ul", {}, lint.map(l => h("li", {}, h("code", {}, l.code), " ", l.message, l.hint ? h("span", { class: "muted" }, " — " + l.hint) : null))))));
-  return out;
-}
-function detailTabs(r) {
+// Cách tính & kiểm tra của một câu trả lời
+function openHow(r) {
   const v = r.validation || {};
-  return tabs([
-    r.sql && { label: "SQL", render: () => h("div", {}, r.sql_source === "semantic" || r.sql_source === "semantic+repair" ? h("div", { class: "muted", style: { marginBottom: "6px", fontSize: "12.5px" } }, "Sinh từ semantic layer — đúng định nghĩa chỉ số chuẩn.") : null, codeBlock(r.sql),
-      v.sql_exec && v.sql_exec !== r.sql ? h("div", { style: { marginTop: "8px" } }, h("div", { class: "muted", style: { fontSize: "12.5px", marginBottom: "4px" } }, "SQL thực thi (đã tiêm RLS / LIMIT):"), codeBlock(v.sql_exec)) : null) },
-    r.plan && { label: "Kế hoạch truy vấn", render: () => codeBlock(JSON.stringify(r.plan, null, 2)) },
-    v.checks && { label: "Kiểm duyệt", render: () => h("div", {}, h("ul", { class: "checks" }, v.checks.map(c => h("li", {}, c.passed ? "✅" : "❌", h("b", {}, c.name), h("span", { class: "muted" }, c.detail || "")))),
-      (r.metrics_matched || []).length ? h("div", { class: "callout ok" }, "✓ Khớp định nghĩa semantic layer: ", r.metrics_matched.map(m => m.label + (m.filter_matches ? "" : " (⚠ khác điều kiện lọc chuẩn)")).join(", ")) : null,
-      (r.lint || []).filter(l => l.severity === "info").map(l => h("div", { class: "callout info" }, h("code", {}, l.code), " ", l.message))) },
-    r.cost && r.cost.tables && r.cost.tables.length && { label: "Chi phí quét", render: () => costView(r.cost) },
-    r.lineage && r.lineage.length && { label: "Lineage", render: () => h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
-      h("thead", {}, h("tr", {}, h("th", {}, "Cột kết quả"), h("th", {}, "Lấy từ cột nào trong kho"), h("th", {}, "Dữ liệu gốc (nếu có khai báo)"))),
-      h("tbody", {}, r.lineage.map(l => h("tr", {}, h("td", {}, h("b", {}, l.column)), h("td", { class: "mono" }, l.sources.join("\n")), h("td", { class: "mono", style: { whiteSpace: "pre-line" } }, l.raw_sources.join("\n"))))))) },
-    { label: "Pipeline agent", render: () => h("div", {}, h("div", { class: "steps" }, (r.trace || []).map((t, i) => [i ? h("span", { class: "muted" }, "→") : null, h("span", { class: "step" }, t.node, " ", h("span", { class: "ms" }, t.ms + "ms"))])),
-      h("div", { class: "trace-list", style: { marginTop: "8px" } }, (r.trace || []).filter(t => t.detail).map(t => h("div", {}, h("b", {}, t.node + ": "), t.detail))),
-      (r.llm_trace || []).length ? h("div", { style: { marginTop: "8px" } }, h("b", {}, "Tool calls của LLM"), h("div", { class: "trace-list" }, r.llm_trace.map(t => h("div", {}, h("code", {}, t.tool), " ", JSON.stringify(t.input).slice(0, 160), " ", h("span", { class: "muted" }, t.ms + "ms"))))) : null) },
-    r.repairs && r.repairs.length && { label: "Tự sửa lỗi", render: () => h("div", {}, r.repairs.map(x => h("div", { class: "finding" }, h("div", {}, h("b", {}, "Lần " + x.attempt + " · " + (x.agent === "claude" ? "Claude" : x.agent === "openrouter" ? "OpenRouter" : "Rule-based") + ": "), x.fix),
-      h("div", { class: "muted", style: { fontSize: "12.5px" } }, (x.error || {}).code + " — " + (x.error || {}).message), x.sql_after ? h("details", {}, h("summary", {}, "SQL trước / sau"), codeBlock(x.sql_before), h("div", { style: { height: "6px" } }), codeBlock(x.sql_after)) : null))) },
-    r.audit && { label: "Kiểm chứng số liệu", render: () => h("div", {}, h("div", { class: "callout " + (r.audit.ok ? "ok" : "err") }, r.audit.ok ? `Tất cả ${r.audit.numbers_in_text} token số trong diễn giải đều thuộc ${r.audit.facts_checked} dữ kiện được tái tính từ kết quả truy vấn.` : "Có số không kiểm chứng được: " + r.audit.unverified_numbers.join(", ")),
-      h("div", { class: "tbl-wrap", style: { marginTop: "8px" } }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, h("th", {}, "Dữ kiện"), h("th", {}, "Giá trị hiển thị"), h("th", {}, "Tái tính"), h("th", {}, "Khớp"))),
-        h("tbody", {}, (r.audit.details || []).map(d => h("tr", {}, h("td", { class: "mono" }, d.fact), h("td", {}, d.text), h("td", { class: "mono" }, d.recomputed == null ? (d.source || "ngữ cảnh") : String(d.recomputed)), h("td", {}, d.match ? "✅" : "❌"))))))) },
+  const defs = (r.definitions || []).length ? r.definitions : (r.plan && r.plan.metrics || []).map(metricByName).filter(Boolean);
+  const src = { semantic: "Theo định nghĩa chỉ số chung", "semantic+repair": "Theo định nghĩa chỉ số chung (đã tự sửa)", fewshot: "Theo truy vấn mẫu đã được xác nhận", lookup: "Đọc thẳng từ bảng danh mục", llm: "Trợ lý tự viết truy vấn", user: "Câu lệnh do người dùng viết", user_edit: "Câu lệnh đã được người dùng sửa" }[r.sql_source];
+  drawer("Cách tính câu trả lời này", [
+    defs.length ? [h("h4", {}, "Chỉ số đã dùng"), defs.map(d => h("div", { class: "term" }, h("div", { class: "hd" }, h("b", {}, d.label), d.owner ? h("span", { class: "pill" }, d.owner) : null), h("div", { class: "desc" }, d.description || "Chưa có mô tả.")))] : null,
+    src ? [h("h4", {}, "Nguồn của truy vấn"), h("div", { class: "sec" }, src)] : null,
+    r.audit ? [h("h4", {}, "Đối chiếu số liệu"), h("div", { class: "note " + (r.audit.ok ? "ok" : "bad") }, r.audit.ok
+      ? `Đã tính lại ${r.audit.facts_checked} con số trong lời giải thích từ bảng kết quả, tất cả đều khớp.`
+      : "Có số chưa đối chiếu được: " + (r.audit.unverified_numbers || []).join(", ") + ". Hãy dựa vào bảng kết quả.")] : null,
+    (v.checks || []).length ? [h("h4", {}, "Các bước kiểm tra trước khi chạy"), h("ul", { class: "checks" }, v.checks.map(c => h("li", {}, c.passed ? "✅" : "❌", h("span", {}, c.name), h("span", { class: "muted small" }, c.detail || ""))))] : null,
+    r.cost && r.cost.human ? [h("h4", {}, "Dung lượng dữ liệu đã đọc"), h("div", { class: "sec" }, "Khoảng " + r.cost.human)] : null,
+    r.sql ? [h("h4", {}, "Câu lệnh SQL"), codeBlock(r.sql)] : null,
+    r.variance && (r.variance.queries || []).length ? [h("h4", {}, `Các truy vấn đã chạy (${r.variance.queries.length})`), r.variance.queries.map(q => h("details", { style: { marginTop: "6px" } }, h("summary", {}, q.purpose, h("span", { class: "muted small" }, " · " + fmtBytes(q.bytes) + " · " + q.rows + " dòng")), codeBlock(q.sql)))] : null,
+    h("h4", {}, "Chi tiết kỹ thuật"), h("div", { class: "tech" }, techDetails(r)),
   ]);
 }
-function costView(c) {
-  return h("div", {},
-    h("div", { class: "row", style: { marginBottom: "8px" } }, h("span", { class: "badge" }, "Tổng: " + c.human), h("span", { class: "badge " + (c.decision === "approval" ? "warn" : c.decision === "blocked" ? "err" : "ok") }, { auto: "Tự động chạy", approval: "Cần duyệt (HITL)", blocked: "Bị chặn" }[c.decision] || c.decision),
-      c.thresholds ? h("span", { class: "muted", style: { fontSize: "12.5px" } }, `Ngưỡng vai trò: cảnh báo ${fmtBytes(c.thresholds.warn_bytes)} · duyệt ${fmtBytes(c.thresholds.approval_bytes)} · chặn ${fmtBytes(c.thresholds.max_bytes)}`) : null),
-    h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Bảng", "Cột được đọc", "Dòng quét / tổng", "Cắt phân vùng", "Bytes"].map(x => h("th", {}, x)))),
-      h("tbody", {}, c.tables.map(t => h("tr", {}, h("td", { class: "mono" }, t.table, t.large ? h("span", { class: "badge warn", style: { marginLeft: "4px" } }, "bảng lớn") : null),
-        h("td", { class: "mono" }, t.columns.join(", ")), h("td", { class: "num" }, nf0.format(t.rows_scanned) + " / " + nf0.format(t.rows_total)),
-        h("td", {}, t.partition_filter ? `${t.partition_column} ∈ [${t.partition_filter[0] || "…"}, ${t.partition_filter[1] || "…"}) · bỏ ${nf1.format(t.pruned_pct)}%` : (t.partition_column ? "không (quét toàn bảng)" : "—")),
-        h("td", { class: "num" }, fmtBytes(t.bytes))))))),
-    (c.reasons || []).length ? h("div", { class: "callout warn" }, c.reasons.join(" ")) : null);
-}
-function feedbackRow(r) {
-  if (!r.run_id || !r.sql) return null;
-  const box = h("div", { class: "feedback" }, "Kết quả có đúng không?");
-  const up = h("button", { class: "btn sm", onclick: async () => { const x = await api("/api/feedback", { body: { run_id: r.run_id, rating: 1 } }); box.replaceChildren("Cảm ơn! " + (x.fewshot_added ? "Đã lưu thành ví dụ few-shot đã xác nhận." : "")); } }, "👍 Đúng");
-  const down = h("button", { class: "btn sm", onclick: () => {
-    const ta = h("textarea", { rows: 8, class: "mono" }, r.sql);
-    const cm = h("input", { type: "text", placeholder: "Sai ở đâu? (không bắt buộc)", style: { width: "100%", marginBottom: "8px" } });
-    modal("Góp ý / sửa SQL", h("div", {}, cm, h("div", { class: "muted", style: { fontSize: "12.5px", marginBottom: "4px" } }, "Nếu bạn sửa SQL đúng, hệ thống sẽ học thành ví dụ few-shot (sau khi kiểm duyệt):"), ta),
-      [close => h("button", { class: "btn primary", onclick: async () => {
-        const corrected = ta.value.trim() !== r.sql.trim() ? ta.value : null;
-        const x = await api("/api/feedback", { body: { run_id: r.run_id, rating: -1, comment: cm.value, corrected_sql: corrected } });
-        close(); box.replaceChildren(x.ok ? ("Đã ghi nhận góp ý. " + (x.fewshot_added ? "SQL sửa đã được lưu làm ví dụ." : "")) : x.error);
-      } }, "Gửi")]);
-  } }, "👎 Chưa đúng");
-  box.append(up, down);
-  return box;
-}
 
-// ---- phần hiển thị cho người mới (chế độ Đơn giản): nói bằng lời thường, chi tiết kỹ thuật thu vào trong
-function understanding(r) {
+// ------------------------------------------------------------------ câu trả lời
+function understood(r) {
   const p = r.plan; if (!p || !(p.metrics || []).length) return null;
-  const ml = Object.fromEntries((S.cfg.metrics || []).map(m => [m.name, m.label]));
   const dl = Object.fromEntries((S.cfg.dimensions || []).map(d => [d.name, d.label]));
   const span = t => t.label || ((t.start || "…") + " đến trước " + (t.end || "…"));
-  const parts = [["Chỉ số", p.metrics.map(m => ml[m] || m).join(", ")]];
-  if ((p.dimensions || []).length) parts.push(["Chia theo", p.dimensions.map(d => dl[d] || d).join(", ")]);
-  (p.filters || []).forEach(f => parts.push([dl[f.dimension] || f.dimension, (f.op === "not_in" ? "khác " : f.op === "like" ? "có chứa " : "") + (f.values || []).join(", ")]));
-  if (p.time_range && (p.time_range.label || p.time_range.start)) parts.push(["Thời gian", span(p.time_range)]);
-  const cmp = p.compare || p.variance_compare; if (cmp) parts.push(["So với", span(cmp)]);
-  if (p.limit) parts.push(["Lấy", p.limit + " dòng đầu"]);
-  return h("div", { class: "understood" }, h("span", { class: "u-l" }, "Mình hiểu câu hỏi là"),
-    parts.map(([k, v]) => h("span", { class: "u-chip" }, h("span", { class: "k" }, k), v)));
+  const chips = p.metrics.map(m => { const mm = metricByName(m);
+    return h("button", { class: "u-chip", title: "Xem định nghĩa", onclick: () => openGlossary(m) }, h("span", { class: "k" }, "Chỉ số"), mm ? mm.label : m, h("span", { class: "i" }, "ⓘ")); });
+  const kv = (k, v) => h("span", { class: "u-chip" }, h("span", { class: "k" }, k), v);
+  if ((p.dimensions || []).length) chips.push(kv("Chia theo", p.dimensions.map(d => dl[d] || d).join(", ")));
+  (p.filters || []).forEach(f => chips.push(kv(dl[f.dimension] || f.dimension, (f.op === "not_in" ? "khác " : f.op === "like" ? "có chứa " : "") + (f.values || []).join(", "))));
+  if (p.time_range && (p.time_range.label || p.time_range.start)) chips.push(kv("Thời gian", span(p.time_range)));
+  const cmp = p.compare || p.variance_compare; if (cmp) chips.push(kv("So với", span(cmp)));
+  if (p.limit) chips.push(kv("Lấy", p.limit + " dòng đầu"));
+  return h("div", { class: "understood" }, h("span", { class: "lb" }, "Mình hiểu là"), chips);
 }
-function plainNotes(r) {
-  const out = [understanding(r)];
-  if (r.assumptions && r.assumptions.length) out.push(h("div", { class: "callout info" }, h("span", {}, "ℹ️"), h("div", {}, h("b", {}, "Mình đã tự hiểu thêm: "), h("ul", {}, r.assumptions.map(a => h("li", {}, a))))));
-  const notes = (r.notes || []).filter(n => !/offline/.test(n));     // chuyện rơi về bộ luật đã có cảnh báo riêng
-  const lint = (r.lint || []).filter(l => l.severity !== "info");
-  if (notes.length || lint.length) out.push(h("div", { class: "callout " + (lint.length ? "warn" : "info") }, h("span", {}, lint.length ? "⚠️" : "📝"), h("div", {}, h("b", {}, "Lưu ý khi đọc kết quả: "),
-    h("ul", {}, lint.map(l => h("li", {}, l.message, l.hint ? h("span", { class: "muted" }, " " + l.hint) : null)), notes.map(a => h("li", {}, a))))));
-  return out.filter(Boolean);
+function extraNotes(r) {
+  const out = [];
+  if (r.llm_error) out.push(h("div", { class: "note warn" }, "⚠️", h("div", {}, h("b", {}, "Mô hình ngôn ngữ tạm thời không dùng được. "), "Câu hỏi nêu rõ chỉ số và thời gian vẫn được trả lời; câu khác bạn thử lại sau ít phút.")));
+  if ((r.assumptions || []).length) out.push(h("div", { class: "note" }, "ℹ️", h("div", {}, h("b", {}, "Mình đã tự hiểu thêm:"), h("ul", {}, r.assumptions.map(a => h("li", {}, a))))));
+  const notes = r.notes || [], lint = (r.lint || []).filter(l => l.severity !== "info");
+  if (notes.length || lint.length) out.push(h("div", { class: "note " + (lint.length ? "warn" : "") }, lint.length ? "⚠️" : "📝",
+    h("div", {}, h("b", {}, "Lưu ý khi đọc kết quả:"), h("ul", {}, lint.map(l => h("li", {}, l.message)), notes.map(a => h("li", {}, a))))));
+  return out;
 }
-function trustLine(r) {
-  const items = [];
-  if (r.audit) items.push(r.audit.ok ? ["ok", "✓ Mọi con số trong lời giải thích khớp với kết quả truy vấn", "Hệ thống tính lại từng con số từ bảng kết quả và so với lời giải thích."]
-    : ["err", "✗ Có con số chưa đối chiếu được", "Hãy dựa vào bảng kết quả, không dựa vào lời giải thích."]);
-  const src = r.sql_source;
-  if (src === "semantic" || src === "semantic+repair" || src === "fewshot") items.push(["ok", "📐 Tính theo định nghĩa chỉ số chung của công ty", "Công thức lấy từ danh mục chỉ số, không do trợ lý tự nghĩ ra."]);
-  else if (src === "llm") items.push(["warn", "✍️ Câu này trợ lý tự viết truy vấn — nên xem lại cách tính", "Câu hỏi nằm ngoài các chỉ số định nghĩa sẵn. Bấm “Xem chi tiết kỹ thuật” để kiểm tra."]);
-  if (r.validation && (r.validation.rls_applied || []).length) items.push(["info", "🔒 Chỉ gồm dữ liệu bạn được phép xem", "Kết quả đã được lọc theo phạm vi của tài khoản."]);
-  if (r.truncated) items.push(["warn", "Bảng đã được cắt bớt", "Kết quả có nhiều dòng hơn giới hạn hiển thị."]);
-  if (r.repairs && r.repairs.length) items.push(["info", "🔧 Đã tự sửa truy vấn " + r.repairs.length + " lần", "Truy vấn ban đầu có lỗi và đã được sửa tự động trước khi chạy."]);
-  items.push(["", "⏱ " + nf1.format((r.elapsed_ms || 0) / 1000) + " giây", "Thời gian xử lý"]);
-  return h("div", { class: "trust" }, items.map(([cls, text, tip]) => h("span", { class: "badge " + cls, title: tip }, text)));
-}
-function definitionsBox(r) {
-  if (!(r.definitions || []).length) return null;
-  return h("details", { class: "defs" }, h("summary", {}, "Chỉ số này được tính thế nào?"),
-    r.definitions.map(d => h("div", { class: "def" }, h("b", {}, d.label), d.owner ? h("span", { class: "muted" }, " · " + d.owner) : null, h("div", {}, d.description || "Chưa có mô tả."))));
+function trust(r) {
+  const it = [];
+  if (r.audit) it.push(r.audit.ok ? ["ok", "✓ Số liệu đã đối chiếu"] : ["bad", "✗ Có số chưa đối chiếu được"]);
+  const s = r.sql_source;
+  if (s === "semantic" || s === "semantic+repair" || s === "fewshot") it.push(["info", "📐 Định nghĩa chuẩn của công ty"]);
+  else if (s === "lookup") it.push(["info", "📇 Từ bảng danh mục"]);
+  else if (s === "llm") it.push(["warn", "✍️ Trợ lý tự viết truy vấn, nên xem cách tính"]);
+  if (r.validation && (r.validation.rls_applied || []).length) it.push(["", "🔒 Trong phạm vi bạn được xem"]);
+  if (r.truncated) it.push(["warn", "Bảng đã cắt bớt"]);
+  it.push(["", "⏱ " + nf1.format((r.elapsed_ms || 0) / 1000) + " giây"]);
+  return h("div", { class: "trust" }, it.map(([c, t]) => h("span", { class: "pill " + c }, t)));
 }
 function followUps(r) {
   if (!(r.follow_ups || []).length) return null;
-  return h("div", { class: "followups" }, h("span", { class: "muted" }, "Hỏi tiếp:"), r.follow_ups.map(s => h("button", { class: "chip", onclick: () => sendMessage(s) }, s)));
+  return h("div", { class: "follow" }, h("span", { class: "lb" }, "Hỏi tiếp:"), r.follow_ups.map(s => h("button", { class: "chip", onclick: () => send(s) }, s)));
 }
-function howBox(r) {
-  return h("details", { class: "how" }, h("summary", {}, "Xem chi tiết kỹ thuật: câu lệnh SQL, các bước kiểm tra, chi phí"), metaBadges(r), detailTabs(r));
+function footer(r) {
+  const ft = h("div", { class: "ans-ft" });
+  ft.append(h("button", { class: "btn ghost sm", onclick: () => openHow(r) }, "📐 Cách tính"));
+  if (r.columns && r.rows && r.rows.length) ft.append(h("button", { class: "btn ghost sm", onclick: () => downloadCSV(r.columns, r.rows) }, "⬇ Tải CSV"));
+  ft.append(h("span", { class: "sp" }));
+  if (r.run_id && r.sql) {
+    const thanks = h("span", { class: "thanks" });
+    const up = h("button", { class: "btn ghost sm", title: "Kết quả đúng", onclick: async () => {
+      try { await api("/api/feedback", { body: { run_id: r.run_id, rating: 1 } }); thanks.textContent = "Cảm ơn bạn!"; up.remove(); down.remove(); } catch (e) { toast(e.message); } } }, "👍");
+    const down = h("button", { class: "btn ghost sm", title: "Kết quả chưa đúng", onclick: () => feedbackModal(r, () => { thanks.textContent = "Đã ghi nhận góp ý."; up.remove(); down.remove(); }) }, "👎");
+    ft.append(thanks, up, down);
+  }
+  return ft;
 }
-function fallbackNote(r) {
-  if (!r.fallback) return null;
-  return h("div", { class: "callout warn" }, h("span", {}, "⚠️"), h("div", {}, h("b", {}, "Câu này do bộ luật có sẵn trả lời, không phải mô hình ngôn ngữ. "),
-    "Mô hình tạm thời không dùng được, nên kết quả có thể chưa sát ý câu hỏi. Hãy đối chiếu với phần “Mình hiểu câu hỏi là”.",
-    h("div", { class: "muted", style: { fontSize: "12px" } }, r.fallback)));
-}
-
-function renderAnswer(r, ctx = {}) {
-  const card = h("div", { class: "card msg-bot" });
-  const body = h("div", { class: "answer" });
-  const rawAppend = body.append.bind(body);     // phần nào không có (null) thì bỏ qua, không in chữ "null" ra màn hình
-  body.append = (...kids) => rawAppend(...kids.flat(Infinity).filter(k => k != null && k !== false));
-  card.append(body);
-  const T = r.type;
-  if (T === "clarification") {
-    body.append(h("div", { class: "txt" }, "🤔 ", r.text));
-    if (S.simple) body.append(h("div", { class: "sec", style: { fontSize: "13px", marginTop: "4px" } }, "Mình hỏi lại vì mỗi cách hiểu cho ra một con số khác nhau. Chọn một cách để mình trả lời đúng ý bạn:"));
-    const opts = h("div", { class: "opts" });
-    (r.clarification.options || []).forEach((o, i) => opts.append(h("button", { class: "btn", onclick: e => {
-      [...opts.children].forEach(b => (b.disabled = true)); e.target.classList.add("primary");
-      sendMessage(o, { id: r.clarification.id, option: i });
-    } }, o)));
-    body.append(opts, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "Lựa chọn sẽ được ghi nhớ cho các câu hỏi sau trong hội thoại này."));
-    return card;
-  }
-  if (T === "pending_approval") {
-    if (S.simple) {
-      body.append(h("div", { class: "txt" }, h("b", {}, "⏸ Mình cần bạn đồng ý trước khi chạy")),
-        h("div", { class: "sec", style: { marginTop: "4px" } }, "Câu hỏi này phải đọc khá nhiều dữ liệu" + (r.cost && r.cost.human ? " (khoảng " + r.cost.human + ")" : "") +
-          ". Với truy vấn cỡ này hệ thống luôn dừng lại để người hỏi xác nhận, tránh chạy nhầm một truy vấn nặng. Nếu cách hiểu bên dưới đúng ý bạn, bấm “Đồng ý chạy”."),
-        fallbackNote(r), ...plainNotes(r));
-    } else {
-      body.append(h("div", { class: "txt" }, h("b", {}, "⏸ Cần xác nhận trước khi chạy (Human-in-the-loop)")), h("div", { class: "sec", style: { marginTop: "4px" } }, r.text));
-      body.append(metaBadges(r), ...callouts(r));
-      if (r.cost) body.append(h("div", { style: { marginTop: "8px" } }, costView(r.cost)));
-    }
-    const ta = h("textarea", { rows: Math.min(18, (r.sql || "").split("\n").length + 1), class: "mono", style: { marginTop: "10px" } }, r.sql || "");
-    const msg = h("div", {});
-    const act = async (action) => {
-      [...btns.children].forEach(b => (b.disabled = true));
-      msg.replaceChildren(h("div", { class: "thinking" }, h("div", { class: "spinner" }), action === "approve" ? "Đang kiểm duyệt lại & chạy…" : "Đang hủy…"));
-      try { const res = await api("/api/approve", { body: { run_id: r.run_id, action, sql: ta.value } }); msg.replaceChildren(); appendBot(res); }
-      catch (e) { msg.replaceChildren(h("div", { class: "callout err" }, e.message)); }
-    };
-    const btns = h("div", { class: "row", style: { marginTop: "8px" } },
-      h("button", { class: "btn primary", onclick: () => act("approve") }, S.simple ? "✓ Đồng ý chạy" : "✓ Duyệt & chạy"),
-      h("button", { class: "btn danger", onclick: () => act("reject") }, S.simple ? "✕ Không chạy" : "✕ Từ chối"),
-      S.simple ? null : h("span", { class: "muted", style: { fontSize: "12.5px" } }, "Bạn có thể chỉnh SQL — bản sửa sẽ được kiểm duyệt lại (cú pháp, phân quyền, chi phí)."));
-    if (S.simple) body.append(btns, msg,
-      h("details", { class: "how" }, h("summary", {}, "Xem hoặc sửa câu lệnh SQL sẽ chạy"), ta, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "4px" } }, "Nếu bạn sửa, câu lệnh mới sẽ được kiểm tra lại về quyền truy cập và chi phí trước khi chạy.")),
-      howBox(r));
-    else body.append(h("div", { class: "muted", style: { marginTop: "10px", fontSize: "12.5px" } }, "SQL sẽ chạy:"), ta, btns, msg, detailTabs(r));
-    return card;
-  }
-  if (T === "error" || T === "blocked") {
-    body.append(h("div", { class: "callout err" }, h("span", {}, T === "blocked" ? "⛔" : "⚠️"), h("div", {}, h("b", {}, T === "blocked" ? "Đã chặn: " : "Không thực hiện được: "), r.text || r.error)));
-    if (S.simple) {
-      body.append(fallbackNote(r), ...plainNotes(r));
-      if (T === "blocked") body.append(h("div", { class: "sec", style: { fontSize: "13px", marginTop: "8px" } }, "Yêu cầu này nằm ngoài quyền của tài khoản hoặc ngoài những việc trợ lý được phép làm (trợ lý chỉ đọc dữ liệu, không sửa, không xóa)."));
-      else body.append(h("div", { class: "followups" }, h("span", { class: "muted" }, "Thử diễn đạt lại, hoặc bắt đầu từ một câu mẫu:"), (S.cfg.samples || []).slice(0, 3).map(s => h("button", { class: "chip", onclick: () => sendMessage(s) }, s))));
-      if (r.sql || r.validation) body.append(howBox(r));
-      return card;
-    }
-    body.append(fallbackNote(r), ...callouts(r), metaBadges(r));
-    if (r.sql || r.validation) body.append(detailTabs(r));
-    return card;
-  }
-  if (T === "rejected") { body.append(h("div", { class: "muted" }, "Đã từ chối chạy truy vấn. (Đã ghi log)")); return card; }
-  if (T === "info") {
-    body.append(h("div", { class: "txt", html: md(r.text) }));
-    if (r.metric_cards) body.append(h("div", { class: "tbl-wrap", style: { marginTop: "10px" } }, h("table", { class: "tbl" },
-      h("thead", {}, h("tr", {}, ["Chỉ số", "Chủ sở hữu", "Công thức", "Điều kiện", "Phân tích được theo"].map(x => h("th", {}, x)))),
-      h("tbody", {}, r.metric_cards.map(c => h("tr", {}, h("td", {}, h("b", {}, c.label), h("div", { class: "muted mono" }, c.name)), h("td", {}, c.owner), h("td", { class: "mono" }, c.sql), h("td", { class: "mono" }, c.filter || "—"), h("td", { style: { fontSize: "12px" } }, c.dimensions.join(", "))))))));
-    if (r.schema_tables) r.schema_tables.forEach(t => body.append(h("details", { style: { marginTop: "8px" } }, h("summary", {}, h("b", { class: "mono" }, t.table), " — ", t.description),
-      h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("tbody", {}, t.columns.map(c => h("tr", {}, h("td", { class: "mono" }, c.name), h("td", { class: "muted" }, c.type), h("td", {}, c.description, c.restricted ? h("span", { class: "badge err", style: { marginLeft: "6px" } }, "🔒 hạn chế") : null)))))))));
-    if (r.suggestions) body.append(h("div", { class: "row", style: { marginTop: "10px" } }, r.suggestions.map(s => h("button", { class: "chip", onclick: () => sendMessage(s) }, s))));
-    return card;
-  }
-  // ---------------- result / variance
-  body.append(h("div", { class: "txt", html: md(r.text) }), fallbackNote(r));
-  if (S.simple) body.append(...plainNotes(r));
-  else body.append(metaBadges(r), ...callouts(r));
-  if (T === "variance") body.append(varianceView(r));
-  else {
-    const viz = h("div", {});
-    renderChart(viz, r.chart);
-    body.append(viz);
-    if (r.columns && r.rows && r.rows.length && !(r.chart && r.chart.type === "kpi" && r.rows.length === 1 && r.columns.length <= 2)) {
-      body.append(h("div", { class: "row", style: { marginTop: "10px", justifyContent: "space-between" } }, h("span", { class: "muted", style: { fontSize: "12.5px" } }, "Bảng kết quả"),
-        h("button", { class: "btn sm", onclick: () => downloadCSV(r.columns, r.rows) }, "⬇ CSV")), dataTable(r.columns, r.rows, r.columns_meta, r.chart && r.chart.highlights));
-    }
-  }
-  if (S.simple) body.append(trustLine(r), definitionsBox(r), followUps(r), howBox(r), feedbackRow(r));
-  else body.append(followUps(r), detailTabs(r), feedbackRow(r));
-  return card;
+function feedbackModal(r, done) {
+  const cm = h("textarea", { rows: 3, placeholder: "Sai ở đâu? Ví dụ: số này phải tính cả đơn đang giao…" });
+  const bg = h("div", { class: "modal-bg", onclick: e => { if (e.target === bg) bg.remove(); } },
+    h("div", { class: "modal" }, h("h3", {}, "Góp ý cho câu trả lời"), cm,
+      h("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end", marginTop: "12px" } },
+        h("button", { class: "btn", onclick: () => bg.remove() }, "Hủy"),
+        h("button", { class: "btn primary", onclick: async () => {
+          try { await api("/api/feedback", { body: { run_id: r.run_id, rating: -1, comment: cm.value } }); bg.remove(); done(); } catch (e) { toast(e.message); } } }, "Gửi góp ý"))));
+  document.body.append(bg); cm.focus();
 }
 
-function varianceView(r) {
-  const v = r.variance, f = v.format;
+function resultVisual(r) {
   const wrap = h("div", {});
-  const t = v.total;
-  wrap.append(h("div", { class: "kpis", style: { marginTop: "12px" } },
-    h("div", { class: "kpi" }, h("div", { class: "l" }, v.metric_label + " · " + v.period_now.label), h("div", { class: "v" }, fmtCompact(t.now, f))),
-    h("div", { class: "kpi" }, h("div", { class: "l" }, v.metric_label + " · " + v.period_prev.label), h("div", { class: "v" }, fmtCompact(t.prev, f))),
-    h("div", { class: "kpi" }, h("div", { class: "l" }, "Chênh lệch"), h("div", { class: "v" }, (t.delta >= 0 ? "+" : "") + fmtCompact(t.delta, f)), h("div", { class: "d" }, t.pct == null ? "" : (t.pct >= 0 ? "▲ +" : "▼ ") + nf1.format(t.pct) + "%")),
-    v.significance && S.simple ? h("div", { class: "kpi", title: "So mức biến động này với các lần biến động trước đó của chính chỉ số này." }, h("div", { class: "l" }, "So với dao động thường thấy"),
-      h("div", { class: "v" }, v.significance.significant ? "Bất thường" : "Bình thường"), h("div", { class: "d" }, "dựa trên " + v.significance.n_history + " kỳ trước (z = " + nfa.format(v.significance.z) + ")")) :
-    v.significance ? h("div", { class: "kpi" }, h("div", { class: "l" }, "Kiểm định bất thường"), h("div", { class: "v" }, "z = " + nfa.format(v.significance.z)), h("div", { class: "d" },"p = " + v.significance.p_value + (v.significance.significant ? " · bất thường" : " · bình thường"))) : null));
+  const spec = r.chart;
+  const hasRows = r.columns && r.rows && r.rows.length;
+  if (spec && spec.type === "kpi") {
+    wrap.append(kpiTiles(spec));
+    if (hasRows && !(r.rows.length === 1 && r.columns.length <= 2)) wrap.append(dataTable(r.columns, r.rows, r.columns_meta));
+    return wrap;
+  }
+  if (!spec) { if (hasRows) wrap.append(dataTable(r.columns, r.rows, r.columns_meta)); return wrap; }
+  // có biểu đồ: cho chuyển qua lại Biểu đồ / Bảng thay vì xếp chồng cả hai
+  const pane = h("div", {});
+  let mode = "chart";
+  const seg = h("div", { class: "seg", role: "tablist" });
+  const show = m => {
+    mode = m; [...seg.children].forEach(b => b.classList.toggle("on", b.dataset.m === m)); pane.replaceChildren();
+    if (m === "chart") renderChart(pane, spec); else pane.append(dataTable(r.columns, r.rows, r.columns_meta, spec.highlights));
+  };
+  seg.append(h("button", { "data-m": "chart", onclick: () => show("chart") }, "Biểu đồ"));
+  if (hasRows) seg.append(h("button", { "data-m": "table", onclick: () => show("table") }, "Bảng" + (r.rows.length > 1 ? " (" + nf0.format(r.row_count || r.rows.length) + " dòng)" : "")));
+  wrap.append(h("div", { class: "viewbar" }, seg), pane);
+  show(mode);
+  return wrap;
+}
+function varianceVisual(r) {
+  const v = r.variance, f = v.format, t = v.total;
+  const wrap = h("div", {}, h("div", { class: "kpis" },
+    h("div", { class: "kpi" }, h("div", { class: "l" }, v.period_now.label), h("div", { class: "v" }, fmtCompact(t.now, f))),
+    h("div", { class: "kpi" }, h("div", { class: "l" }, v.period_prev.label), h("div", { class: "v" }, fmtCompact(t.prev, f))),
+    h("div", { class: "kpi" }, h("div", { class: "l" }, "Chênh lệch"), h("div", { class: "v" }, (t.delta >= 0 ? "+" : "") + fmtCompact(t.delta, f)),
+      t.pct == null ? null : h("div", { class: "d " + (t.pct >= 0 ? "up" : "down") }, (t.pct >= 0 ? "▲ +" : "▼ ") + nf1.format(t.pct) + "%")),
+    v.significance ? h("div", { class: "kpi", title: "So với các lần biến động trước của chính chỉ số này" }, h("div", { class: "l" }, "So với dao động thường thấy"),
+      h("div", { class: "v" }, v.significance.significant ? "Bất thường" : "Bình thường"), h("div", { class: "d" }, "dựa trên " + v.significance.n_history + " kỳ trước")) : null));
   const causes = (v.root_causes || []).filter(c => c.kind !== "significance");
-  if (causes.length) wrap.append(h("div", { style: { marginTop: "12px" } }, h("b", {}, S.simple ? "Nguyên nhân tìm thấy khi kiểm tra dữ liệu" : "Kiểm tra nguyên nhân gốc (xác định bằng code)"),
-    causes.map(c => h("div", { class: "finding " + (c.severity === "critical" ? "critical" : c.severity === "warning" ? "warning" : "info"), style: { marginTop: "8px" } },
-      h("div", { class: "row" }, sevIcon(c.severity === "critical" ? "critical" : c.severity === "warning" ? "warning" : "info"), h("b", {}, c.title),
-        h("span", { class: "badge" }, { data_quality: "Chất lượng dữ liệu", business: "Kinh doanh", calendar: "Lịch / mùa vụ", info: "Khác" }[c.kind] || c.kind)),
-      h("div", { style: { marginTop: "4px" } }, c.message), c.action ? h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "4px" } }, "➜ " + c.action) : null,
-      c.test ? h("div", { class: "muted mono", style: { fontSize: "12px", marginTop: "4px" } }, JSON.stringify(c.test)) : null))));
+  if (causes.length) wrap.append(h("div", { class: "chart-t" }, "Nguyên nhân tìm thấy"), causes.map(c => h("div", { class: "cause " + (c.severity || "") },
+    h("b", {}, c.title), h("div", { class: "sec small" }, c.message), c.action ? h("div", { class: "act" }, "➜ " + c.action) : null)));
+  // giả thuyết do mô hình nêu, code đã chạy truy vấn kiểm chứng (số liệu ở đây đều do code tính)
+  const HS = { confirmed: ["ok", "Xác nhận"], weak: ["warn", "Yếu"], rejected: ["bad", "Bác bỏ"], untested: ["", "Chưa kiểm được"] };
+  const hyps = (v.hypotheses || []).filter(x => HS[x.status]);
+  if (hyps.length) wrap.append(h("div", { class: "chart-t" }, "Giả thuyết do AI nêu, đã kiểm bằng dữ liệu"),
+    hyps.map(x => h("div", { class: "cause hyp " + x.status },
+      h("div", { class: "hyp-hd" }, h("span", { class: "pill " + HS[x.status][0] }, HS[x.status][1]), h("b", {}, x.claim)),
+      x.pct != null || x.now != null ? h("div", { class: "sec small" }, `${x.metric_label} ở ${x.segment_label}: ${fmtCompact(x.prev, x.format)} → ${fmtCompact(x.now, x.format)}` +
+        (x.pct != null ? ` (${x.pct >= 0 ? "+" : ""}${nf1.format(x.pct)}%)` : "") + (x.share != null ? ` · giải thích ${nf1.format(x.share * 100)}% biến động` : "")) : null,
+      h("div", { class: "muted small" }, x.reason))));
   const viz = h("div", {}); renderChart(viz, r.chart); wrap.append(viz);
-  const mkTbl = items => h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
-    h("thead", {}, h("tr", {}, ["Thành phần", v.period_now.label, v.period_prev.label, "Chênh lệch", "%", "Đóng góp vào biến động"].map(x => h("th", {}, x)))),
-    h("tbody", {}, items.map(i => h("tr", {}, h("td", {}, String(i.member)), h("td", { class: "num" }, fmtCell(i.now, f)), h("td", { class: "num" }, fmtCell(i.prev, f)),
-      h("td", { class: "num" }, fmtCell(i.delta, f)), h("td", { class: "num" }, i.pct == null ? "—" : nf1.format(i.pct) + "%"), h("td", { class: "num" }, i.contribution_pct == null ? "—" : nf1.format(i.contribution_pct) + "%"))))));
-  wrap.append(tabs([
-    ...(v.drivers || []).map(d => ({ label: "Theo " + d.label.toLowerCase() + (d.dimension === v.best_dimension ? " ★" : ""), render: () => h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginBottom: "6px" } }, `Thành phần dẫn đầu giải thích ${nf1.format(d.top_share * 100)}% biến động (tỷ trọng gốc ${nf1.format(d.base_share * 100)}%).`), mkTbl(d.items)) })),
-    ...(v.drill || []).map(d => ({ label: (S.simple ? "Bên trong " + d.within + ": theo " : "Drill: " + d.within + " × ") + d.label.toLowerCase(), render: () => mkTbl(d.items) })),
-    v.decomposition && { label: S.simple ? "Do số lượng hay do giá trị?" : "Sản lượng × giá trị", render: () => { const x = v.decomposition, cl = x.count_label || "số đơn", vl = x.value_label || "giá trị đơn trung bình", cap = s => s.charAt(0).toUpperCase() + s.slice(1); return h("div", { class: "kpis" },
-      h("div", { class: "kpi" }, h("div", { class: "l" }, cap(cl) + " (" + x.segment + ")"), h("div", { class: "v" }, nf0.format(x.orders_now)), h("div", { class: "d" }, "kỳ trước " + nf0.format(x.orders_prev) + " · " + nf1.format(x.orders_pct) + "%")),
-      h("div", { class: "kpi" }, h("div", { class: "l" }, cap(vl)), h("div", { class: "v" }, fmtCompact(x.aov_now, "currency")), h("div", { class: "d" }, "kỳ trước " + fmtCompact(x.aov_prev, "currency") + " · " + nf1.format(x.aov_pct) + "%")),
-      h("div", { class: "kpi" }, h("div", { class: "l" }, "Phần thay đổi do " + cl), h("div", { class: "v" }, fmtCompact(x.volume_effect, "currency"))),
-      h("div", { class: "kpi" }, h("div", { class: "l" }, "Phần thay đổi do " + vl), h("div", { class: "v" }, fmtCompact(x.value_effect, "currency")))); } },
-    { label: (S.simple ? "Các truy vấn đã chạy" : "Truy vấn đã chạy") + ` (${(v.queries || []).length})`, render: () => h("div", {}, (v.queries || []).map(q => h("details", {}, h("summary", {}, q.purpose, " · ", h("span", { class: "muted" }, fmtBytes(q.bytes) + " · " + q.rows + " dòng · " + q.ms + "ms")), codeBlock(q.sql)))) },
-  ]));
+  const best = (v.drivers || []).find(d => d.dimension === v.best_dimension) || (v.drivers || [])[0];
+  if (best) wrap.append(h("div", { class: "chart-t" }, "Đóng góp vào biến động theo " + best.label.toLowerCase()),
+    h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
+      h("thead", {}, h("tr", {}, h("th", {}, best.label), h("th", { class: "num" }, v.period_now.label), h("th", { class: "num" }, v.period_prev.label), h("th", { class: "num" }, "Chênh lệch"), h("th", { class: "num" }, "Đóng góp"))),
+      h("tbody", {}, best.items.map(i => h("tr", {}, h("td", {}, String(i.member)), h("td", { class: "num" }, fmtCell(i.now, f)), h("td", { class: "num" }, fmtCell(i.prev, f)),
+        h("td", { class: "num" }, fmtCell(i.delta, f)), h("td", { class: "num" }, i.contribution_pct == null ? "—" : nf1.format(i.contribution_pct) + "%")))))));
   return wrap;
 }
 
-// ------------------------------------------------------------------ chat
-function appendBot(resp) {
-  const msgs = $("#msgs"); if (!msgs) return;
+function renderAnswer(r) {
+  const card = h("div", { class: "ans" });
+  const add = (...k) => card.append(...k.flat(Infinity).filter(x => x != null && x !== false));
+  const T = r.type;
+  if (T === "multi") {          // câu nhiều ý: mỗi ý một khối trả lời đầy đủ
+    add(h("div", { class: "txt", html: md(r.text) }));
+    (r.parts || []).forEach((p, i) => add(h("div", { class: "part" },
+      h("div", { class: "part-hd" }, `${i + 1}. ${p.task || p.question}`), renderAnswer(p))));
+    add(followUps(r));
+    return card;
+  }
+  if (T === "clarification") {
+    const det = (r.clarification || {}).details || [];
+    const opts = h("div", { class: "opts" });
+    ((r.clarification || {}).options || []).forEach((o, i) => {
+      const d = det[i];
+      const b = d ? h("button", { class: "opt" }, h("div", { class: "t" }, d.label, d.owner ? h("span", { class: "pill" }, d.owner) : null), d.hint ? h("div", { class: "h" }, d.hint) : null, h("div", { class: "d" }, d.description))
+        : h("button", { class: "opt simple" }, h("div", { class: "t" }, o));
+      b.onclick = () => { [...opts.children].forEach(x => (x.disabled = true)); b.classList.add("chosen"); send(o, { id: r.clarification.id, option: i }); };
+      opts.append(b);
+    });
+    add(h("div", { class: "ask-q" }, "🤔 ", r.text), h("div", { class: "ask-why" }, "Mỗi cách hiểu cho ra một con số khác nhau, nên mình hỏi lại thay vì tự đoán."), opts,
+      h("div", { class: "muted small", style: { marginTop: "8px" } }, "Lựa chọn được ghi nhớ cho các câu sau trong cuộc hội thoại này."));
+    return card;
+  }
+  if (T === "pending_approval") {
+    const ta = h("textarea", { rows: Math.min(16, (r.sql || "").split("\n").length + 1), class: "mono" }, r.sql || "");
+    const msg = h("div", {});
+    const act = async a => {
+      [...btns.querySelectorAll("button")].forEach(b => (b.disabled = true));
+      msg.replaceChildren(h("div", { class: "thinking", style: { marginTop: "10px" } }, h("div", { class: "spinner" }), a === "approve" ? "Đang kiểm tra lại và chạy…" : "Đang hủy…"));
+      try {
+        const res = await api("/api/approve", { body: { run_id: r.run_id, action: a, sql: ta.value } });
+        if (card.closest("#thread")) { msg.replaceChildren(); appendAnswer(res); }
+        else msg.replaceChildren(renderAnswer(res));          // trang Tự viết SQL: hiện kết quả ngay dưới thẻ
+      }
+      catch (e) { msg.replaceChildren(h("div", { class: "note bad" }, e.message)); }
+    };
+    const btns = h("div", { style: { display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap" } },
+      h("button", { class: "btn primary", onclick: () => act("approve") }, "✓ Đồng ý chạy"), h("button", { class: "btn danger", onclick: () => act("reject") }, "✕ Không chạy"));
+    add(understood(r), h("div", { class: "ask-q" }, "⏸ Mình cần bạn đồng ý trước khi chạy"),
+      h("div", { class: "ask-why" }, "Câu hỏi này phải đọc khá nhiều dữ liệu" + (r.cost && r.cost.human ? " (khoảng " + r.cost.human + ")" : "") + ". Nếu phần “Mình hiểu là” đúng ý bạn, bấm “Đồng ý chạy”."),
+      extraNotes(r), btns, msg,
+      h("details", { style: { marginTop: "10px" } }, h("summary", { class: "sec small" }, "Xem hoặc sửa câu lệnh SQL sẽ chạy"), ta,
+        h("div", { class: "muted small", style: { marginTop: "4px" } }, "Nếu bạn sửa, câu lệnh sẽ được kiểm tra lại quyền truy cập và chi phí trước khi chạy.")));
+    return card;
+  }
+  if (T === "error" || T === "blocked") {
+    add(h("div", { class: "note bad", style: { marginTop: 0 } }, T === "blocked" ? "⛔" : "⚠️", h("div", {}, h("b", {}, T === "blocked" ? "Mình không thể làm yêu cầu này. " : "Mình chưa trả lời được. "), r.text || r.error)),
+      T === "blocked" ? h("div", { class: "sec small", style: { marginTop: "8px" } }, "Trợ lý chỉ đọc dữ liệu (không sửa, không xóa) và chỉ trong phạm vi tài khoản của bạn.")
+        : h("div", { class: "follow" }, h("span", { class: "lb" }, "Thử một câu mẫu:"), (S.cfg.samples || []).slice(0, 3).map(s => h("button", { class: "chip", onclick: () => send(s) }, s))),
+      extraNotes(r));
+    if (r.sql) add(h("div", { class: "ans-ft" }, h("button", { class: "btn ghost sm", onclick: () => openHow(r) }, "📐 Xem chi tiết")));
+    return card;
+  }
+  if (T === "rejected") { add(h("div", { class: "muted" }, "Đã hủy, truy vấn không được chạy.")); return card; }
+  if (T === "info") {
+    add(h("div", { class: "txt", html: md(r.text) }));
+    if (r.metric_cards) add(h("div", { style: { marginTop: "8px" } }, r.metric_cards.map(c => h("div", { class: "term" },
+      h("div", { class: "hd" }, h("b", {}, c.label), c.owner ? h("span", { class: "pill" }, c.owner) : null),
+      (metricByName(c.name) || {}).description ? h("div", { class: "desc" }, metricByName(c.name).description) : null,
+      h("div", { class: "muted small", style: { marginTop: "4px" } }, "Chia được theo: " + (c.dimensions || []).join(", "))))));
+    if (r.schema_tables) add(r.schema_tables.map(t => h("details", { style: { marginTop: "8px" } }, h("summary", {}, h("b", { class: "mono" }, t.table), " · ", t.description),
+      h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("tbody", {}, t.columns.map(c => h("tr", {}, h("td", { class: "mono" }, c.name), h("td", {}, c.description, c.restricted ? h("span", { class: "pill bad", style: { marginLeft: "6px" } }, "🔒 hạn chế") : null)))))))));
+    if (r.suggestions) add(h("div", { class: "follow" }, r.suggestions.map(s => h("button", { class: "chip", onclick: () => send(s) }, s))));
+    return card;
+  }
+  // result / variance
+  add(understood(r), h("div", { class: "txt", html: md(r.text) }), extraNotes(r), T === "variance" ? varianceVisual(r) : resultVisual(r), trust(r), followUps(r), footer(r));
+  return card;
+}
+
+// ------------------------------------------------------------------ hội thoại
+function scrollToEl(el) { const sc = $("#scroll"); if (sc && el) sc.scrollTop = Math.max(0, el.offsetTop - 12); }
+function appendAnswer(resp) {
+  const th = $("#thread"); if (!th) return;
   const card = renderAnswer(resp);
-  msgs.append(card);
-  // đưa câu hỏi và phần đầu câu trả lời lên đầu khung nhìn (câu trả lời thường cao hơn màn hình; cuộn xuống cuối sẽ che mất lời giải thích)
-  const anchor = card.previousElementSibling && card.previousElementSibling.classList.contains("msg-user") ? card.previousElementSibling : card;
-  msgs.scrollTop = Math.max(0, anchor.offsetTop - msgs.offsetTop - 12);
-  if (resp.conversation_id && (!S.conv || S.conv !== resp.conversation_id)) { S.conv = resp.conversation_id; }
+  th.append(card);
+  const prev = card.previousElementSibling;
+  scrollToEl(prev && prev.classList.contains("q-user") ? prev : card);   // đưa câu hỏi + đầu câu trả lời lên đầu khung nhìn
+  if (resp.conversation_id) S.conv = resp.conversation_id;
   loadConvs();
 }
-async function sendMessage(text, clarification = null) {
-  const msgs = $("#msgs"); if (!msgs) return;
+async function send(text, clarification = null) {
+  const th = $("#thread"); if (!th || S.busy) return;
   if (!text && !clarification) return;
-  $(".empty", msgs) && $(".empty", msgs).remove();
-  msgs.append(h("div", { class: "msg-user" }, text));
-  const steps = S.simple
-    ? ["Đang đọc câu hỏi", "Đang chọn chỉ số và cách tính", "Đang viết truy vấn", "Đang kiểm tra quyền truy cập và chi phí", "Đang chạy trên kho dữ liệu", "Đang viết lời giải thích và đối chiếu số liệu"]
-    : ["Nạp ngữ cảnh hội thoại", "Lập kế hoạch truy vấn", "Sinh SQL theo semantic layer", "Kiểm duyệt cú pháp · RBAC · RLS", "Ước lượng chi phí quét", "Chạy trên kho dữ liệu", "Diễn giải & kiểm chứng số liệu"];
-  const th = h("div", { class: "card msg-bot" }, h("div", { class: "thinking" }, h("div", { class: "spinner" }), h("span", { id: "think-step" }, steps[0] + "…")));
-  msgs.append(th); msgs.scrollTop = msgs.scrollHeight;
-  const pace = S.cfg.mode === "offline" ? 450 : 1300;       // có mô hình ngôn ngữ thì mỗi câu mất vài giây
-  let k = 0; const timer = setInterval(() => { k = Math.min(k + 1, steps.length - 1); const el = $("#think-step"); if (el) el.textContent = steps[k] + "…"; }, pace);
+  closeDrawer(); closePage();
+  const hero = $(".hero-wrap", th); if (hero) { th.replaceChildren(); setTitle(text); }
+  th.append(h("div", { class: "q-user" }, text));
+  const steps = ["Đang đọc câu hỏi", "Đang chọn chỉ số và cách tính", "Đang viết truy vấn", "Đang kiểm tra quyền truy cập và chi phí", "Đang chạy trên kho dữ liệu", "Đang viết lời giải thích và đối chiếu số liệu"];
+  const label = h("span", {}, steps[0] + "…");
+  const bars = h("div", { class: "steps-mini" }, steps.map((_, i) => h("i", { class: i === 0 ? "on" : "" })));
+  const wait = h("div", { class: "ans" }, h("div", { class: "thinking" }, h("div", { class: "spinner" }), label), bars);
+  th.append(wait); scrollToEl(wait);
+  S.busy = true; syncSend();
+  let k = 0;
+  const timer = setInterval(() => { k = Math.min(k + 1, steps.length - 1); label.textContent = steps[k] + "…"; [...bars.children].forEach((b, i) => b.classList.toggle("on", i <= k)); }, S.cfg.mode === "none" ? 450 : 900);
   try {
     if (!S.conv) { const c = await api("/api/conversations", { body: {} }); S.conv = c.id; }
     const resp = await api("/api/chat", { body: { message: text, conversation_id: S.conv, clarification } });
-    th.remove(); appendBot(resp);
-  } catch (e) { th.replaceChildren(h("div", { class: "answer" }, h("div", { class: "callout err" }, e.message))); }
-  finally { clearInterval(timer); }
+    wait.remove(); appendAnswer(resp);
+  } catch (e) { wait.replaceChildren(h("div", { class: "note bad", style: { marginTop: 0 } }, "⚠️", e.message)); }
+  finally { clearInterval(timer); S.busy = false; syncSend(); }
 }
 async function loadConvs() {
   try { S.convs = await api("/api/conversations"); } catch (e) { return; }
   const list = $("#convlist"); if (!list) return;
-  list.replaceChildren(...S.convs.map(c => h("div", { class: "conv" + (c.id === S.conv ? " active" : ""), onclick: () => openConv(c.id) },
+  if (!S.convs.length) { list.replaceChildren(h("div", { class: "muted small", style: { padding: "6px 10px" } }, "Chưa có cuộc hội thoại nào.")); return; }
+  list.replaceChildren(...S.convs.map(c => h("div", { class: "conv" + (c.id === S.conv && !S.page ? " active" : ""), onclick: () => openConv(c.id) },
     h("span", { class: "t", title: c.title }, c.title),
-    h("button", { class: "x", title: "Xóa", onclick: async e => { e.stopPropagation(); await api("/api/conversations/" + c.id, { method: "DELETE" }); if (S.conv === c.id) { S.conv = null; renderView(); } else loadConvs(); } }, "✕"))));
+    h("button", { class: "x", title: "Xóa cuộc hội thoại", "aria-label": "Xóa", onclick: async e => {
+      e.stopPropagation(); if (!confirm("Xóa cuộc hội thoại “" + c.title + "”?")) return;
+      await api("/api/conversations/" + c.id, { method: "DELETE" }); if (S.conv === c.id) newConv(); else loadConvs(); } }, "✕"))));
 }
+function destroyCharts() { S.charts.forEach(c => { try { c.destroy(); } catch (e) { /* bỏ qua */ } }); S.charts = []; }
 async function openConv(id) {
-  S.conv = id;
-  const c = await api("/api/conversations/" + id);
-  const msgs = $("#msgs"); msgs.replaceChildren();
+  closePage(); S.conv = id; store.set("v2_conv", id); closeRailSm();
+  let c; try { c = await api("/api/conversations/" + id); } catch (e) { S.conv = null; store.set("v2_conv", null); return newConv(); }
+  destroyCharts();
+  const th = $("#thread"); th.replaceChildren();
+  setTitle(c.title);
   for (const m of c.messages) {
-    if (m.role === "user") { if (m.content.text) msgs.append(h("div", { class: "msg-user" }, m.content.text)); }
-    else msgs.append(renderAnswer(m.content));
+    if (m.role === "user") { if (m.content.text) th.append(h("div", { class: "q-user" }, m.content.text)); }
+    else th.append(renderAnswer(m.content));
   }
-  if (!c.messages.length) msgs.append(emptyState());
-  msgs.scrollTop = msgs.scrollHeight;
+  if (!c.messages.length) th.append(welcome());
+  const sc = $("#scroll"); sc.scrollTop = sc.scrollHeight;
   loadConvs();
 }
-const STARTER_ICON = { lookup: "🔎", compare: "📊", why: "🧭", define: "📖" };
-function rlsText(u) { return Object.values(u.rls || {}).map(v => [].concat(v).join(", ")).join("; "); }
-function goto(view) { S.view = view; store.set("view", view); renderNav(); renderView(); }
-function emptyState() {
-  // màn hình chào: trợ lý là ai, làm được gì, có dữ liệu gì — lấy từ hồ sơ của doanh nghiệp đang phục vụ
+function newConv() {
+  closePage(); S.conv = null; store.set("v2_conv", null); destroyCharts(); closeRailSm();
+  const th = $("#thread"); if (th) th.replaceChildren(welcome());
+  setTitle(""); loadConvs();
+  const ta = $("#ask"); ta && ta.focus();
+}
+function setTitle(t) { const el = $("#title"); if (el) el.textContent = t || "Cuộc hội thoại mới"; }
+
+// ------------------------------------------------------------------ màn hình chào
+const TASK_ICON = { lookup: "🔎", compare: "📊", why: "🧭", define: "📖" };
+function welcome() {
   const u = S.user, p = S.cfg.profile || {};
-  const cap = g => h("div", { class: "cap" }, h("div", { class: "cap-t" }, (STARTER_ICON[g.key] || "•") + " " + g.title), h("div", { class: "cap-h" }, g.hint),
-    g.questions.map(q => h("button", { class: "cap-q", title: "Bấm để hỏi câu này", onclick: () => sendMessage(q) }, q)));
-  return h("div", { class: "empty welcome" },
-    h("h3", {}, "Xin chào" + (u.full_name ? ", " + u.full_name : "") + " 👋"),
-    h("div", { class: "lead" }, "Mình là ", h("b", {}, p.assistant || "trợ lý dữ liệu"), p.company ? [", trả lời câu hỏi về số liệu của ", h("b", {}, p.company)] : null,
-      ". Bạn cứ hỏi bằng tiếng Việt như hỏi một đồng nghiệp. Mình trả về con số, biểu đồ và lời giải thích, kèm cách tính để bạn kiểm tra lại."),
-    u.rls && Object.keys(u.rls).length ? h("div", { class: "callout info" }, "🔒 Tài khoản này được phân quyền xem một phần dữ liệu. Mọi con số mình trả về chỉ tính trong phạm vi đó.") : null,
-    (p.starters || []).length ? h("div", { class: "cap-grid" }, p.starters.map(cap))
-      : h("div", { class: "chips" }, (S.cfg.samples || []).slice(0, 8).map(s => h("button", { class: "chip", onclick: () => sendMessage(s) }, s))),
-    h("div", { class: "welcome-foot" },
-      (p.areas || []).length ? h("div", {}, h("b", {}, "Dữ liệu hiện có: "), p.areas.join(" · "), ` (${p.n_metrics} chỉ số, ${p.n_dimensions} cách chia). `,
-        h("button", { class: "linklike", onclick: () => goto("schema") }, "Xem danh mục")) : null,
-      (p.out_of_scope || []).length ? h("div", {}, h("b", {}, "Mình không làm: "), p.out_of_scope.join("; "), ".") : null,
-      h("div", {}, h("button", { class: "linklike", onclick: showHelp }, "Xem hướng dẫn nhanh"), " · mẹo: sau mỗi câu trả lời có thể hỏi tiếp “chia theo …” hoặc “so với cùng kỳ”.")));
+  const name = callName(u);
+  return h("div", { class: "hero-wrap" },
+    h("div", { class: "hero" },
+      h("h1", {}, name === "bạn" ? "Chào bạn, hôm nay bạn muốn xem số liệu gì?" : "Chào " + name + ", hôm nay bạn muốn xem số liệu gì?"),
+      h("div", { class: "lead" }, "Hỏi bằng tiếng Việt như hỏi một đồng nghiệp" + (p.company ? ", về dữ liệu của " + p.company : "") +
+        ". Mình trả về con số, biểu đồ, lời giải thích và cách tính để bạn kiểm tra lại."),
+      u.rls && Object.keys(u.rls).length ? h("div", { class: "note scope" }, "🔒", "Tài khoản của bạn chỉ xem được một phần dữ liệu (" + Object.values(u.rls).map(v => [].concat(v).join(", ")).join("; ") + "). Mọi con số đều tính trong phạm vi đó.") : null),
+    (p.starters || []).length ? h("div", { class: "tasks" }, p.starters.map(g => h("div", { class: "task" },
+      h("span", { class: "ic" }, TASK_ICON[g.key] || "•"), h("b", {}, g.title), h("span", { class: "hint" }, g.hint),
+      g.questions.map(q => h("button", { class: "q", onclick: () => send(q) }, q))))) : null,
+    (p.confusable_terms || []).map(t => [
+      h("div", { class: "section-t" }, "📖 Trước khi hỏi: “" + t.term + "” có " + t.options.length + " cách tính"),
+      compareCards(t, true),
+      h("div", { class: "tip" }, "Ghi rõ tên trong câu hỏi (vd “" + t.options[0].label.toLowerCase() + " " + (anchorMonth() || "tháng 10") + "”) thì mình trả lời ngay. Chỉ ghi “" + t.term + "” thì mình sẽ hỏi lại bạn chọn loại nào."),
+    ]),
+    h("div", { class: "section-t" }, "💡 Mẹo"),
+    h("div", { class: "sec small" }, "Sau mỗi câu trả lời, bạn có thể hỏi tiếp ngắn gọn: “chia theo kênh”, “so với cùng kỳ”, “còn tháng trước thì sao?”. ",
+      "Bấm ", h("b", {}, "Từ điển"), " ở góc trên để xem định nghĩa mọi chỉ số."),
+    (p.out_of_scope || []).length ? h("div", { class: "muted small", style: { marginTop: "6px" } }, "Mình không làm: " + p.out_of_scope.join("; ") + ".") : null);
 }
 function showHelp() {
-  const p = (S.cfg || {}).profile || {};
-  const ex = (p.starters || []).flatMap(g => g.questions.slice(0, 1));
-  const sect = (title, ...kids) => h("div", { class: "help-sec" }, h("b", {}, title), ...kids);
-  modal("Hướng dẫn nhanh", h("div", { class: "help" },
-    sect("1. Hỏi thế nào", h("div", {}, "Viết câu hỏi bằng tiếng Việt, nêu rõ bạn muốn xem số gì, trong thời gian nào, chia theo gì. Ví dụ:"),
-      h("ul", {}, ex.map(q => h("li", {}, q)))),
-    sect("2. Đọc câu trả lời", h("ul", {},
-      h("li", {}, h("b", {}, "Mình hiểu câu hỏi là: "), "trợ lý nhắc lại chỉ số, thời gian, cách chia đã dùng. Nếu khác ý bạn, hãy hỏi lại rõ hơn."),
-      h("li", {}, h("b", {}, "Dấu ✓ màu xanh: "), "mọi con số trong lời giải thích đã được tính lại từ bảng kết quả và khớp."),
-      h("li", {}, h("b", {}, "Chỉ số này được tính thế nào: "), "định nghĩa và bộ phận chịu trách nhiệm của từng chỉ số."),
-      h("li", {}, h("b", {}, "Xem chi tiết kỹ thuật: "), "câu lệnh SQL, các bước kiểm tra quyền và chi phí, nguồn gốc dữ liệu. Dành cho người cần kiểm tra sâu."))),
-    sect("3. Khi trợ lý hỏi lại", h("div", {}, "Một số từ có nhiều cách tính (ví dụ “doanh thu”). Trợ lý hỏi lại thay vì tự đoán, và nhớ lựa chọn của bạn trong cuộc hội thoại đó.")),
-    sect("4. Khi trợ lý từ chối hoặc chờ bạn duyệt", h("div", {}, "Trợ lý chỉ đọc dữ liệu trong phạm vi tài khoản của bạn. Truy vấn quét nhiều dữ liệu sẽ dừng lại để bạn xem và bấm duyệt trước khi chạy.")),
-    sect("5. Hai chế độ hiển thị", h("div", {}, "Nút ở góc trên bên phải chuyển giữa ", h("b", {}, "Đơn giản"), " (lời thường, chi tiết kỹ thuật thu gọn) và ", h("b", {}, "Chuyên gia"), " (hiện ngay nhãn kỹ thuật và các tab SQL, kiểm duyệt, chi phí).")),
-    sect("Từ ngữ", h("ul", {},
-      h("li", {}, h("b", {}, "Chỉ số: "), "một con số có định nghĩa thống nhất, ví dụ " + ((p.metric_examples || []).slice(0, 2).join(", ").toLowerCase() || "doanh thu") + "."),
-      h("li", {}, h("b", {}, "Cách chia (chiều phân tích): "), "tiêu chí để tách con số, ví dụ theo tháng, theo khu vực."),
-      h("li", {}, h("b", {}, "Phân quyền theo dòng: "), "mỗi tài khoản chỉ thấy phần dữ liệu thuộc phạm vi của mình.")))));
-}
-function viewChat() {
-  const first = ((((S.cfg.profile || {}).starters || [])[0] || {}).questions || [])[0] || (S.cfg.samples || [])[0] || "";
-  const ta = h("textarea", { rows: 2, placeholder: "Hỏi về số liệu bằng tiếng Việt" + (first ? ", ví dụ: " + first : "") + "…", onkeydown: e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = ta.value.trim(); if (v) { ta.value = ""; sendMessage(v); } }
-  } });
-  const el = h("div", { class: "chat" },
-    h("div", { class: "convs" },
-      h("div", { style: { padding: "10px" } }, h("button", { class: "btn primary", style: { width: "100%" }, onclick: () => { S.conv = null; renderView(); } }, "＋ Hội thoại mới")),
-      h("div", { class: "list", id: "convlist" }),
-      h("div", { class: "samples" }, h("div", { class: "muted", style: { fontSize: "11px", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: "4px" } }, "Câu hỏi mẫu"),
-        (S.cfg.samples || []).map(s => h("button", { class: "s", onclick: () => sendMessage(s) }, s)))),
-    h("div", { class: "thread" }, h("div", { class: "msgs", id: "msgs" }, emptyState()),
-      h("div", { class: "composer" }, h("div", { class: "box" }, ta, h("button", { class: "btn primary", onclick: () => { const v = ta.value.trim(); if (v) { ta.value = ""; sendMessage(v); } } }, "Gửi")),
-        h("div", { class: "muted", style: { fontSize: "12px", marginTop: "4px" } }, "Enter để gửi · Shift+Enter xuống dòng · Trợ lý nhớ câu trước, nên có thể hỏi tiếp ngắn gọn: “chia theo …”, “so với cùng kỳ”, “còn tháng trước thì sao?”"))));
-  setTimeout(() => { loadConvs(); if (S.conv) openConv(S.conv); ta.focus(); }, 0);
-  return el;
-}
-
-// ------------------------------------------------------------------ SQL console
-function viewConsole() {
-  const ta = h("textarea", { rows: 12, class: "mono" }, store.get("console_sql") || (S.cfg.profile || {}).console_example || "SELECT 1");
-  const out = h("div", { style: { marginTop: "14px" } });
-  const save = () => store.set("console_sql", ta.value);
-  const check = async () => {
-    save(); out.replaceChildren(h("div", { class: "thinking" }, h("div", { class: "spinner" }), "Đang kiểm tra…"));
-    try {
-      const v = await api("/api/sql/validate", { body: { sql: ta.value } });
-      const card = h("div", { class: "card" }, h("div", { class: "hd" }, h("b", {}, "Kết quả dry-run"), h("span", { class: "badge " + (v.ok ? "ok" : "err") }, v.ok ? "Hợp lệ" : "Không hợp lệ")), h("div", { class: "bd" },
-        h("ul", { class: "checks" }, (v.checks || []).map(c => h("li", {}, c.passed ? "✅" : "❌", h("b", {}, c.name), h("span", { class: "muted" }, c.detail || "")))),
-        (v.errors || []).map(e => h("div", { class: "callout err" }, h("code", {}, e.code), " ", e.message, e.hint ? h("div", { class: "muted" }, e.hint) : null)),
-        (v.lint || []).map(l => h("div", { class: "callout " + (l.severity === "info" ? "info" : "warn") }, h("code", {}, l.code), " ", l.message, l.hint ? h("span", { class: "muted" }, " — " + l.hint) : null)),
-        v.cost ? h("div", { style: { marginTop: "10px" } }, costView(v.cost)) : null,
-        v.sql_exec ? h("details", { style: { marginTop: "8px" } }, h("summary", {}, "SQL thực thi (sau RLS/LIMIT)"), codeBlock(v.sql_exec)) : null));
-      out.replaceChildren(card);
-    } catch (e) { out.replaceChildren(h("div", { class: "callout err" }, e.message)); }
-  };
-  const run = async () => {
-    save(); out.replaceChildren(h("div", { class: "thinking" }, h("div", { class: "spinner" }), "Đang kiểm duyệt & chạy…"));
-    try {
-      const r = await api("/api/sql/run", { body: { sql: ta.value, conversation_id: S.consoleConv || null } });
-      S.consoleConv = r.conversation_id;
-      out.replaceChildren(h("div", { id: "msgs", style: { display: "flex", flexDirection: "column", gap: "12px" } }, renderAnswer(r)));
-    } catch (e) { out.replaceChildren(h("div", { class: "callout err" }, e.message)); }
-  };
-  return h("div", { class: "page" }, h("h2", {}, S.simple ? "Tự viết SQL" : "SQL Console"),
-    h("p", { class: "sub" }, S.simple ? "Dành cho người biết SQL. Bạn gõ truy vấn, hệ thống kiểm tra quyền truy cập, ước lượng chi phí, tự sửa lỗi tên cột rồi mới chạy. Trang này chỉ đọc dữ liệu, không sửa hay xóa được." : "Mọi SQL đều qua cùng pipeline: kiểm tra cú pháp → chỉ đọc → hàm an toàn → RBAC/RLS → dry-run → lint → ước lượng chi phí → (duyệt nếu bảng lớn) → chạy. Lỗi tên cột, tên bảng sẽ được agent tự sửa theo catalog."),
-    ta, h("div", { class: "row", style: { marginTop: "8px" } }, h("button", { class: "btn", onclick: check }, "🔍 Kiểm tra (dry-run)"), h("button", { class: "btn primary", onclick: run }, "▶ Chạy"),
-      h("span", { class: "muted", style: { fontSize: "12.5px" } }, "Thử xem hệ thống chặn thế nào: " + ((S.cfg.profile || {}).console_tries || []).join(" · "))), out);
-}
-
-// ------------------------------------------------------------------ schema & chỉ số
-function viewSchema() {
-  const page = h("div", { class: "page" }, h("h2", {}, S.simple ? "Dữ liệu và chỉ số" : "Schema & Semantic layer"), h("p", { class: "sub" }, S.simple ? "Những gì bạn có thể hỏi: danh sách chỉ số (kèm cách tính và bộ phận chịu trách nhiệm), các cách chia, và các bảng dữ liệu phía sau. Cột có dấu 🔒 bị ẩn với tài khoản của bạn." : "Danh mục dữ liệu (data catalog) và định nghĩa chỉ số thống nhất. Cột 🔒 bị hạn chế theo vai trò."));
-  const q = h("input", { type: "text", placeholder: "Lọc bảng/cột/chỉ số…", style: { width: "320px" } });
-  page.append(q);
-  const content = h("div", { style: { marginTop: "12px" } });
-  page.append(content);
-  api("/api/schema").then(data => {
-    const draw = () => {
-      const f = q.value.toLowerCase();
-      const match = s => !f || String(s || "").toLowerCase().includes(f);
-      content.replaceChildren(
-        h("div", { class: "card" }, h("div", { class: "hd" }, h("b", {}, "Chỉ số (metrics) — " + data.metrics.length)), h("div", { class: "bd" }, h("div", { class: "tbl-wrap", style: { maxHeight: "360px" } }, h("table", { class: "tbl" },
-          h("thead", {}, h("tr", {}, ["Chỉ số", "Chủ sở hữu", "Định nghĩa", "Công thức", "Điều kiện"].map(x => h("th", {}, x)))),
-          h("tbody", {}, data.metrics.filter(m => match(m.label + m.name + m.description)).map(m => h("tr", {}, h("td", {}, h("b", {}, m.label), h("div", { class: "muted mono" }, m.name)), h("td", {}, m.owner), h("td", { style: { maxWidth: "380px" } }, m.description), h("td", { class: "mono" }, m.sql), h("td", { class: "mono" }, m.filter || "—")))))))),
-        h("div", { style: { height: "14px" } }),
-        ...data.tables.filter(t => match(t.table + t.description + t.columns.map(c => c.name + c.description).join(" "))).map(t => h("details", { class: "card", style: { marginBottom: "8px" } },
-          h("summary", { style: { padding: "10px 14px" } }, h("b", { class: "mono" }, t.table), " ", h("span", { class: "muted" }, "· " + nf0.format(t.rows) + " dòng · " + fmtBytes(t.bytes) + (t.partition_column ? " · phân vùng " + t.partition_column : "")), h("div", { class: "sec", style: { fontSize: "13px" } }, t.description),
-            S.user.can_manage_schema ? h("button", { class: "btn sm", style: { marginTop: "4px" }, onclick: e => { e.preventDefault(); editCatalog(t.table, t.description, t.synonyms); } }, "✎ Sửa mô tả bảng") : null),
-          h("div", { class: "bd" }, h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Cột", "Kiểu", "Mô tả", "Giá trị mẫu", ""].map(x => h("th", {}, x)))),
-            h("tbody", {}, t.columns.map(c => h("tr", {}, h("td", { class: "mono" }, c.name), h("td", { class: "muted" }, c.type),
-              h("td", {}, c.description || h("span", { class: "muted" }, "(chưa có mô tả)"), c.sensitivity ? h("span", { class: "badge " + (c.restricted ? "err" : "warn"), style: { marginLeft: "6px" } }, (c.restricted ? "🔒 " : "") + c.sensitivity) : null),
-              h("td", { style: { fontSize: "12px", maxWidth: "320px" } }, c.sample_values ? c.sample_values.slice(0, 8).join(", ") : (c.range ? c.range.join(" → ") : "")),
-              h("td", {}, S.user.can_manage_schema ? h("button", { class: "btn sm", onclick: () => editCatalog(t.table + "." + c.name, c.description, []) }, "✎") : null)))))))))
-      );
-    };
-    q.oninput = draw; draw();
-  }).catch(e => content.replaceChildren(h("div", { class: "callout err" }, e.message)));
-  return page;
-}
-function editCatalog(key, desc, syn) {
-  const d = h("textarea", { rows: 3 }, desc || "");
-  const s = h("input", { type: "text", style: { width: "100%" }, value: (syn || []).join(", ") });
-  modal("Sửa catalog: " + key, h("div", {}, h("div", { class: "muted" }, "Mô tả nghiệp vụ (dùng cho tìm kiếm schema & prompt LLM)"), d, h("div", { class: "muted", style: { marginTop: "8px" } }, "Từ đồng nghĩa (phân cách bằng dấu phẩy)"), s),
-    [close => h("button", { class: "btn primary", onclick: async () => { await api("/api/admin/catalog", { method: "PUT", body: { key, description: d.value, synonyms: s.value.split(",").map(x => x.trim()).filter(Boolean) } }); close(); toast("Đã cập nhật catalog & chỉ mục tìm kiếm"); renderView(); } }, "Lưu")]);
-}
-
-// ------------------------------------------------------------------ nhật ký
-function viewLogs() {
-  const page = h("div", { class: "page" }, h("h2", {}, S.simple ? "Lịch sử câu hỏi" : "Nhật ký truy vấn"), h("p", { class: "sub" }, S.simple ? (S.user.role === "admin" ? "Mọi câu hỏi và truy vấn của tất cả người dùng, kèm trạng thái, thời gian và chi phí. Tải về được dưới dạng CSV." : "Các câu bạn đã hỏi và truy vấn đã chạy, kèm trạng thái và thời gian.") : (S.user.role === "admin" ? "Toàn bộ truy vấn của mọi người dùng (audit log)." : "Truy vấn của bạn.")));
-  const box = h("div", {}); page.append(box);
-  api("/api/logs").then(d => {
-    const st = d.stats;
-    if (st) box.append(h("div", { class: "kpis", style: { marginBottom: "12px" } }, [["Tổng truy vấn", nf0.format(st.n || 0)], ["Thành công", nf0.format(st.ok || 0)], ["Lỗi", nf0.format(st.err || 0)], ["Bị chặn", nf0.format(st.blocked || 0)],
-      ["Chờ/từ chối duyệt", nf0.format((st.pending || 0) + (st.rejected || 0))], ["Lần tự sửa", nf0.format(st.retries || 0)], ["Độ trễ TB", nf0.format(st.lat || 0) + " ms"], ["Tổng bytes quét", fmtBytes(st.bytes || 0)]].map(([l, v]) => h("div", { class: "kpi" }, h("div", { class: "l" }, l), h("div", { class: "v" }, v)))));
-    box.append(h("div", { class: "row", style: { marginBottom: "8px" } }, h("button", { class: "btn sm", onclick: async () => {
-      const res = await fetch("/api/logs.csv", { headers: { Authorization: "Bearer " + S.token } }); const b = await res.blob();
-      const a = h("a", { href: URL.createObjectURL(b), download: "query_log.csv" }); document.body.append(a); a.click(); a.remove();
-    } }, "⬇ Xuất CSV"), d.feedback ? h("span", { class: "muted" }, `Phản hồi: ${d.feedback.up || 0} 👍 · ${d.feedback.down || 0} 👎`) : null));
-    const badge = s => h("span", { class: "badge " + ({ success: "ok", error: "err", blocked: "err", pending_approval: "warn", rejected: "warn" }[s] || "") }, s);
-    box.append(h("div", { class: "tbl-wrap", style: { maxHeight: "70vh" } }, h("table", { class: "tbl" },
-      h("thead", {}, h("tr", {}, ["Thời gian", "Người dùng", "Câu hỏi", "Trạng thái", "Nguồn SQL", "Bytes ước tính", "Dòng", "Độ trễ", "Sửa", "Chế độ", "Duyệt"].map(x => h("th", {}, x)))),
-      h("tbody", {}, d.logs.map(l => h("tr", { style: { cursor: "pointer" }, onclick: () => modal("Truy vấn " + l.run_id, h("div", {}, h("p", {}, h("b", {}, l.question)), l.error ? h("div", { class: "callout err" }, l.error) : null, l.sql ? codeBlock(l.sql) : h("div", { class: "muted" }, "(không có SQL)"))) },
-        h("td", { style: { whiteSpace: "nowrap" } }, fmtTime(l.ts)), h("td", {}, l.username, h("div", { class: "muted" }, l.role)), h("td", { style: { maxWidth: "340px" } }, l.question), h("td", {}, badge(l.status)),
-        h("td", {}, l.source), h("td", { class: "num" }, l.est_bytes ? fmtBytes(l.est_bytes) : "—"), h("td", { class: "num" }, l.rows ?? "—"), h("td", { class: "num" }, nf0.format(l.latency_ms || 0) + " ms"),
-        h("td", { class: "num" }, l.retries || 0), h("td", {}, l.llm_mode), h("td", {}, l.approved_by || "")))))));
-  }).catch(e => box.append(h("div", { class: "callout err" }, e.message)));
-  return page;
-}
-
-// ------------------------------------------------------------------ chất lượng dữ liệu
-function viewDQ() {
-  const page = h("div", { class: "page" }, h("h2", {}, S.simple ? "Chất lượng dữ liệu" : "Chất lượng & trôi lệch dữ liệu"),
-    h("p", { class: "sub" }, S.simple ? "Hệ thống tự kiểm tra dữ liệu và liệt kê các vấn đề tìm thấy, ví dụ dữ liệu nạp thiếu, số liệu lệch bất thường, bản ghi trùng. Vấn đề chưa xử lý sẽ được nhắc ngay trong câu trả lời có liên quan." : "Kiểm định xác định (thống kê + quy tắc) trên kho: schema drift theo data contract, mã chưa chuẩn hóa, trùng lặp, khóa mồ côi, trôi lệch đơn vị (KS test, change-point), outlier, bất thường sản lượng, PSI/chi-square. Quy tắc sửa được kiểm duyệt AST rồi build lại model."));
-  const box = h("div", {}); page.append(box);
-  const draw = rep => {
-    box.replaceChildren(...[
-      h("div", { class: "row", style: { marginBottom: "12px" } },
-        h("span", { class: "badge err" }, rep.summary.critical + " nghiêm trọng"), h("span", { class: "badge warn" }, rep.summary.warning + " cảnh báo"), h("span", { class: "badge info" }, rep.summary.info + " thông tin"),
-        h("span", { class: "muted" }, "Cập nhật " + rep.generated_at + " · " + rep.elapsed_s + "s"), h("span", { class: "grow" }),
-        h("button", { class: "btn", onclick: async e => { e.target.disabled = true; e.target.textContent = "Đang chạy…"; draw(await api("/api/dq/run", { body: {} })); } }, "↻ Chạy lại kiểm định")),
-      (rep.active_fixes || []).length ? h("div", { class: "card", style: { marginBottom: "12px" } }, h("div", { class: "hd" }, h("b", {}, "Quy tắc sửa đang áp dụng")), h("div", { class: "bd" },
-        rep.active_fixes.map(f => h("div", { class: "row", style: { marginBottom: "6px" } }, h("span", { class: "badge ok" }, "đang bật"), h("b", {}, f.title || f.id), h("span", { class: "muted" }, "bởi " + f.applied_by + " lúc " + f.applied_at), h("span", { class: "grow" }),
-          h("button", { class: "btn sm danger", onclick: async e => { if (!confirm("Hoàn tác quy tắc và build lại model?")) return; e.target.disabled = true; e.target.textContent = "Đang build lại…"; const r = await api("/api/dq/revert/" + f.id, { body: {} }); toast("Đã hoàn tác"); draw(r.report); } }, "Hoàn tác"))))) : null,
-      ...rep.findings.map(f => findingCard(f, draw))].filter(Boolean));
-  };
-  api("/api/dq").then(draw).catch(e => box.append(h("div", { class: "callout err" }, e.message)));
-  return page;
-}
-function findingCard(f, redraw) {
-  const cls = f.status === "open" ? f.severity : f.status;
-  const ev = Array.isArray(f.evidence) && f.evidence.length ? f.evidence : null;
-  return h("div", { class: "finding " + cls },
-    h("div", { class: "row" }, sevIcon(f.severity), h("b", {}, f.title), h("span", { class: "badge" }, f.check), f.table ? h("span", { class: "badge mono" }, f.table) : null,
-      h("span", { class: "badge " + ({ open: "warn", handled: "ok", fixed: "ok", ok: "ok" }[f.status] || "") }, { open: "đang mở", handled: "đã xử lý ở staging", fixed: "đã sửa", ok: "ổn" }[f.status] || f.status)),
-    h("div", { style: { marginTop: "6px" } }, f.message),
-    f.recommendation ? h("div", { class: "muted", style: { marginTop: "4px", fontSize: "13px" } }, "➜ " + f.recommendation) : null,
-    f.test ? h("div", { class: "muted mono", style: { marginTop: "4px", fontSize: "12px" } }, "Kiểm định: " + JSON.stringify(f.test)) : null,
-    ev ? h("details", { style: { marginTop: "6px" } }, h("summary", {}, "Bằng chứng (" + ev.length + ")"), dataTable(Object.keys(ev[0]), ev.slice(0, 50).map(o => Object.values(o).map(v => typeof v === "object" && v !== null ? JSON.stringify(v) : v)), [])) : null,
-    f.fix && f.status === "open" ? h("div", { class: "callout info", style: { alignItems: "center" } }, h("div", { class: "grow" }, h("b", {}, "Quy tắc sửa đề xuất: "), f.fix.description),
-      h("button", { class: "btn primary sm", onclick: () => confirmFix(f, redraw) }, "Áp dụng…")) : null);
-}
-function confirmFix(f, redraw) {
-  const fx = f.fix;
-  const body = h("div", {}, h("p", {}, fx.description),
-    fx.slots ? h("div", {}, h("div", { class: "muted" }, "Biểu thức sẽ cài vào model " + fx.model + " (hook {{ rule() }}):"), Object.entries(fx.slots).map(([k, v]) => h("div", { style: { marginTop: "6px" } }, h("b", { class: "mono" }, k), codeBlock(v)))) : null,
-    fx.seed_rows ? h("div", {}, h("div", { class: "muted" }, "Dòng mapping sẽ thêm:"), codeBlock(JSON.stringify(fx.seed_rows, null, 2))) : null,
-    h("div", { class: "callout warn" }, "Quy tắc được kiểm tra cú pháp/AST (không truy vấn con, chỉ bí danh u/h/sp, không hàm bị cấm), sau đó build lại toàn bộ model raw → stg → dw và chạy lại kiểm định."));
-  const res = h("div", {});
-  body.append(res);
-  modal("Áp dụng quy tắc sửa dữ liệu", body, [close => h("button", { class: "btn primary", onclick: async e => {
-    e.target.disabled = true; res.replaceChildren(h("div", { class: "thinking" }, h("div", { class: "spinner" }), "Đang kiểm duyệt quy tắc & build lại kho…"));
-    try {
-      const r = await api("/api/dq/fix/" + f.id, { body: {} });
-      if (!r.ok) { res.replaceChildren(h("div", { class: "callout err" }, (r.errors || []).join("; "))); return; }
-      const b = r.impact.before.rows, a = r.impact.after.rows;
-      res.replaceChildren(h("div", { class: "callout ok" }, `✓ Đã build lại ${r.build.models.length} model trong ${r.build.seconds}s.`),
-        h("div", { class: "muted", style: { marginTop: "6px" } }, "Tác động lên " + r.impact.before.metric + ":"),
-        dataTable(["Tháng", "Trước khi sửa", "Sau khi sửa"], b.map((x, i) => [x.thang, x.value, a[i] ? a[i].value : null]), [{ name: "Trước khi sửa", format: "currency" }, { name: "Sau khi sửa", format: "currency" }]));
-      redraw(r.report);
-    } catch (err) { res.replaceChildren(h("div", { class: "callout err" }, err.message)); }
-  } }, "Xác nhận áp dụng")]);
-}
-
-// ------------------------------------------------------------------ lineage
-function viewLineage() {
-  const page = h("div", { class: "page" }, h("h2", {}, S.simple ? "Nguồn gốc dữ liệu" : "Lineage dữ liệu"), h("p", { class: "sub" }, S.simple ? "Mỗi bảng và mỗi cột được tạo ra từ nguồn nào. Chọn một bảng để xem cột; chọn một cột để lần ngược về dữ liệu gốc." : "Dòng chảy dữ liệu raw/ref → staging → dw, tính bằng phân tích AST (sqlglot) trên SQL của các model. Chọn một bảng để xem cột; chọn cột để truy ngược tới cột nguồn."));
-  const wrap = h("div", {});
-  const canvas = h("div", { class: "lineage", style: { height: "560px" } });
-  const side = h("div", { class: "card", style: { marginTop: "14px" } }, h("div", { class: "hd" }, h("b", {}, "Chi tiết")), h("div", { class: "bd", id: "lin-side" }, h("div", { class: "muted" }, "Chọn một bảng ở sơ đồ.")));
-  wrap.append(canvas, side);
-  page.append(wrap);
-  api("/api/lineage").then(data => {
-    const g = data.graph;
-    const serving = (S.cfg.profile || {}).schema || "dw";
-    if (!g.nodes.length) {       // doanh nghiệp nhận một kho đã dựng sẵn: không có các bước biến đổi để vẽ
-      wrap.replaceChildren(h("div", { class: "callout info" }, h("span", {}, "ℹ️"), h("div", {}, h("b", {}, "Doanh nghiệp này chưa khai báo các bước biến đổi dữ liệu, nên chưa có sơ đồ nguồn gốc. "),
-        "Hệ thống đang đọc thẳng các bảng đã dựng sẵn trong kho ", h("code", {}, serving), ". Xem danh sách bảng và cột ở trang ",
-        h("button", { class: "linklike", onclick: () => goto("schema") }, S.simple ? "Dữ liệu và chỉ số" : "Schema & chỉ số"), ".")));
-      return;
-    }
-    const layers = { raw: 0, ref: 0, stg: 1, staging: 1 };
-    layers[serving] = 2;
-    const cols = [[], [], []];
-    g.nodes.forEach(n => cols[layers[n.layer] ?? 0].push(n));
-    cols.forEach(c => c.sort((a, b) => a.id.localeCompare(b.id)));
-    const W = 230, X0 = 14, Y0 = 30, DY = 30;
-    const pos = {};
-    cols.forEach((c, i) => c.forEach((n, j) => (pos[n.id] = { x: X0 + i * (W + 70), y: Y0 + j * DY })));
-    const height = Math.max(...cols.map(c => c.length)) * DY + Y0 + 10;
-    const width = X0 + 3 * (W + 70);
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("width", width); svg.setAttribute("height", height); svg.style.position = "absolute"; svg.style.left = 0; svg.style.top = 0;
-    const paths = [];
-    g.edges.forEach(e => {
-      const a = pos[e.from], b = pos[e.to]; if (!a || !b) return;
-      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      const x1 = a.x + 200, y1 = a.y + 12, x2 = b.x, y2 = b.y + 12, mx = (x1 + x2) / 2;
-      p.setAttribute("d", `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
-      p.setAttribute("fill", "none"); p.setAttribute("stroke", cssVar("--border")); p.setAttribute("stroke-width", "1.5");
-      svg.append(p); paths.push({ e, p });
-    });
-    const inner = h("div", { style: { position: "relative", width: width + "px", height: height + "px" } });
-    inner.append(svg);
-    (S.simple ? ["Dữ liệu gốc", "Đã làm sạch", "Kho để phân tích (" + serving + ")"] : ["Raw / Ref (nguồn)", "Staging (làm sạch)", serving.toUpperCase() + " (mart)"])
-      .forEach((t, i) => inner.append(h("div", { class: "lin-head", style: { left: X0 + i * (W + 70) + "px" } }, t)));
-    const nodes = {};
-    g.nodes.forEach(n => {
-      const el = h("div", { class: "lin-node", style: { left: pos[n.id].x + "px", top: pos[n.id].y + "px" }, title: n.desc || n.id, onclick: () => select(n.id) }, n.id, n.rows != null ? h("span", { class: "muted" }, " · " + nf0.format(n.rows)) : null);
-      nodes[n.id] = el; inner.append(el);
-    });
-    canvas.append(inner);
-    const up = id => { const s = new Set([id]); let ch = true; while (ch) { ch = false; g.edges.forEach(e => { if (s.has(e.to) && !s.has(e.from)) { s.add(e.from); ch = true; } }); } return s; };
-    const down = id => { const s = new Set([id]); let ch = true; while (ch) { ch = false; g.edges.forEach(e => { if (s.has(e.from) && !s.has(e.to)) { s.add(e.to); ch = true; } }); } return s; };
-    function select(id) {
-      const rel = new Set([...up(id), ...down(id)]);
-      Object.entries(nodes).forEach(([k, el]) => { el.classList.toggle("sel", k === id); el.classList.toggle("dim", !rel.has(k)); });
-      paths.forEach(({ e, p }) => { const on = rel.has(e.from) && rel.has(e.to); p.setAttribute("stroke", on ? cssVar("--accent") : cssVar("--border")); p.setAttribute("stroke-width", on ? "2" : "1.2"); });
-      const m = data.models[id];
-      const sideEl = $("#lin-side");
-      sideEl.replaceChildren(h("b", { class: "mono" }, id), h("div", { class: "sec" }, (m && m.desc) || (g.nodes.find(n => n.id === id) || {}).desc || ""),
-        m ? h("div", {}, h("div", { class: "muted", style: { marginTop: "6px" } }, "Nguồn trực tiếp: " + m.sources.join(", ")),
-          h("div", { class: "tbl-wrap", style: { marginTop: "8px", maxHeight: "460px" } }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, h("th", {}, "Cột"), h("th", {}, "Từ cột"))),
-            h("tbody", {}, Object.entries(m.columns).map(([c, srcs]) => h("tr", { style: { cursor: "pointer" }, onclick: () => colTrace(id + "." + c) }, h("td", { class: "mono" }, c), h("td", { class: "mono", style: { fontSize: "11.5px" } }, srcs.join(", ") || "(hằng số / biểu thức)"))))))) : h("div", { class: "muted", style: { marginTop: "6px" } }, "Bảng nguồn (không có model sinh ra)."));
-    }
-    async function colTrace(col) {
-      const r = await api("/api/lineage/column?col=" + encodeURIComponent(col));
-      const tree = n => h("li", {}, h("code", {}, n.column), n.sources.length ? h("ul", {}, n.sources.map(tree)) : null);
-      modal("Truy ngược cột " + col, h("div", {}, h("div", {}, h("b", {}, "Cột nguồn gốc (raw): "), r.raw_sources.join(", ") || "—"), h("ul", { style: { marginTop: "8px" } }, tree(r.upstream)),
-        r.downstream.length ? h("div", {}, h("b", {}, "Được dùng bởi: "), r.downstream.join(", ")) : null));
-    }
-    // mở sẵn bảng có nhiều nguồn đổ về nhất ở tầng phân tích (thường là bảng sự kiện chính)
-    const fanIn = id => g.edges.filter(e => e.to === id).length;
-    const start = [...cols[2]].sort((a, b) => fanIn(b.id) - fanIn(a.id))[0] || g.nodes[0];
-    select(start.id);
-  }).catch(e => page.append(h("div", { class: "callout err" }, e.message)));
-  return page;
-}
-
-// ------------------------------------------------------------------ eval
-function viewEval() {
-  const page = h("div", { class: "page" }, h("h2", {}, S.simple ? "Đo độ chính xác" : "Đánh giá độ chính xác (Execution Accuracy)"),
-    h("p", { class: "sub" }, S.simple ? "Chạy một bộ câu hỏi đã có đáp án chuẩn để biết trợ lý trả lời đúng bao nhiêu phần trăm. Một câu được tính là đúng khi bảng kết quả trùng với bảng của đáp án." : "Bộ câu hỏi mẫu kiểu Spider/BIRD (eval/questions.json) với SQL chuẩn. So khớp kết quả thực thi theo chuẩn Spider 2.0 (mọi cột gold phải có trong kết quả dự đoán). Tối ưu few-shot: học từ lỗi trên train, đo trên dev."));
-  const split = h("select", {}, ["all", "train", "dev"].map(s => h("option", { value: s }, s)));
-  const mode = h("select", {}, h("option", { value: "" }, "theo cài đặt"), h("option", { value: "offline" }, "offline"), h("option", { value: "claude" }, "claude"), h("option", { value: "openrouter" }, "openrouter"));
-  const out = h("div", { style: { marginTop: "12px" } });
-  const hist = h("div", {});
-  const fsBox = h("div", {});
-  const runBtn = h("button", { class: "btn primary", onclick: async () => {
-    runBtn.disabled = true; out.replaceChildren(h("div", { class: "thinking" }, h("div", { class: "spinner" }), "Đang chạy eval… (có thể mất ~1 phút)"));
-    try { const r = await api("/api/eval/run", { body: { split: split.value, mode: mode.value || null } }); showRun(r.summary, r.details); loadHist(); } catch (e) { out.replaceChildren(h("div", { class: "callout err" }, e.message)); }
-    runBtn.disabled = false;
-  } }, "▶ Chạy đánh giá");
-  const optBtn = h("button", { class: "btn", onclick: async () => {
-    optBtn.disabled = true; out.replaceChildren(h("div", { class: "thinking" }, h("div", { class: "spinner" }), "Đang tối ưu: dev (trước) → train (thu lỗi) → thêm few-shot → dev (sau)…"));
-    try {
-      const r = await api("/api/eval/optimize", { body: { mode: mode.value || null } });
-      out.replaceChildren(h("div", { class: "card" }, h("div", { class: "hd" }, h("b", {}, "Kết quả tự tối ưu few-shot")), h("div", { class: "bd" },
-        h("div", { class: "kpis" }, h("div", { class: "kpi" }, h("div", { class: "l" }, "Dev trước tối ưu"), h("div", { class: "v" }, r.before.execution_accuracy + "%")),
-          h("div", { class: "kpi" }, h("div", { class: "l" }, "Dev sau tối ưu"), h("div", { class: "v" }, r.after.execution_accuracy + "%"), h("div", { class: "d" }, (r.after.execution_accuracy - r.before.execution_accuracy >= 0 ? "+" : "") + nf1.format(r.after.execution_accuracy - r.before.execution_accuracy) + " điểm")),
-          h("div", { class: "kpi" }, h("div", { class: "l" }, "Train"), h("div", { class: "v" }, r.train.execution_accuracy + "%")), h("div", { class: "kpi" }, h("div", { class: "l" }, "Few-shot thêm mới"), h("div", { class: "v" }, r.added.length))),
-        r.added.length ? h("ul", {}, r.added.map(q => h("li", {}, q))) : null)));
-      loadHist(); loadFs();
-    } catch (e) { out.replaceChildren(h("div", { class: "callout err" }, e.message)); }
-    optBtn.disabled = false;
-  } }, "🧠 Tối ưu few-shot (train → dev)");
-  function showRun(sm, details) {
-    const k = (l, v, d) => h("div", { class: "kpi" }, h("div", { class: "l" }, l), h("div", { class: "v" }, v), d ? h("div", { class: "d" }, d) : null);
-    out.replaceChildren(h("div", { class: "card" }, h("div", { class: "hd" }, h("b", {}, sm.label), h("span", { class: "muted" }, sm.n + " câu · " + sm.elapsed_s + "s")), h("div", { class: "bd" },
-      h("div", { class: "kpis" }, k("Execution accuracy", sm.execution_accuracy + "%"), k("Tỷ lệ ra kết quả", sm.valid_sql_rate + "%"), k("Diễn giải qua audit", sm.audit_pass_rate + "%"),
-        k("Độ trễ TB", nf0.format(sm.avg_latency_ms) + " ms"), k("Tự sửa TB", sm.avg_retries), k("Bytes quét", fmtBytes(sm.total_bytes))),
-      h("div", { class: "grid2", style: { marginTop: "12px" } },
-        dataTable(["Độ khó", "Số câu", "Accuracy (%)"], Object.entries(sm.by_difficulty).map(([a, b]) => [a, b.n, b.acc]), []),
-        dataTable(["Nhóm", "Số câu", "Accuracy (%)"], Object.entries(sm.by_tag).map(([a, b]) => [a, b.n, b.acc]), [])),
-      details ? h("div", { class: "tbl-wrap", style: { marginTop: "12px", maxHeight: "60vh" } }, h("table", { class: "tbl" },
-        h("thead", {}, h("tr", {}, ["#", "Câu hỏi", "Độ khó", "Split", "Kết quả", "Lý do", "Nguồn", ""].map(x => h("th", {}, x)))),
-        h("tbody", {}, details.map(d => h("tr", {}, h("td", { class: "mono" }, d.id), h("td", { style: { maxWidth: "360px" } }, d.question), h("td", {}, d.difficulty), h("td", {}, d.split),
-          h("td", {}, d.correct ? "✅" : "❌"), h("td", { style: { fontSize: "12.5px", maxWidth: "280px" } }, d.reason), h("td", {}, d.pred_source || d.pred_type),
-          h("td", {}, h("button", { class: "btn sm", onclick: () => modal("Câu " + d.id, h("div", {}, h("p", {}, h("b", {}, d.question)), h("div", { class: "muted" }, "SQL dự đoán"), d.pred_sql ? codeBlock(d.pred_sql) : h("div", { class: "muted" }, "—"), h("div", { class: "muted", style: { marginTop: "8px" } }, "SQL chuẩn (gold)"), d.gold_sql ? codeBlock(d.gold_sql) : h("div", { class: "muted" }, "—"))) }, "SQL")))))) ) : null)));
-  }
-  async function loadHist() {
-    const d = await api("/api/eval");
-    hist.replaceChildren(h("div", { class: "card", style: { marginTop: "14px" } }, h("div", { class: "hd" }, h("b", {}, "Lịch sử đánh giá"), h("span", { class: "muted" }, d.questions.length + " câu hỏi trong bộ eval")), h("div", { class: "bd" },
-      d.runs.length ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["Thời gian", "Nhãn", "Số câu", "Accuracy", "Few-shot trong kho", ""].map(x => h("th", {}, x)))),
-        h("tbody", {}, d.runs.map(r => h("tr", {}, h("td", {}, fmtTime(r.ts)), h("td", {}, r.label), h("td", { class: "num" }, r.summary.n), h("td", { class: "num" }, r.summary.execution_accuracy + "%"), h("td", { class: "num" }, r.summary.fewshots_in_store),
-          h("td", {}, h("button", { class: "btn sm", onclick: async () => { const x = await api("/api/eval/" + r.id); showRun(x.summary, x.details); window.scrollTo(0, 0); } }, "Xem"))))))) : h("div", { class: "muted" }, "Chưa có lượt nào."))));
-  }
-  async function loadFs() {
-    const f = await api("/api/fewshots");
-    fsBox.replaceChildren(h("div", { class: "card", style: { marginTop: "14px" } }, h("div", { class: "hd" }, h("b", { class: "grow" }, "Kho few-shot (" + f.length + ")"),
-      h("button", { class: "btn sm danger", onclick: async () => { await api("/api/fewshots?source=optimizer", { method: "DELETE" }); loadFs(); } }, "Xóa few-shot do optimizer")), h("div", { class: "bd" },
-      h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, ["#", "Câu hỏi", "Nguồn", "Lượt dùng", ""].map(x => h("th", {}, x)))),
-        h("tbody", {}, f.map(x => h("tr", {}, h("td", {}, x.id), h("td", {}, x.question, h("details", {}, h("summary", {}, "SQL"), codeBlock(x.sql))), h("td", {}, h("span", { class: "badge" }, x.source)), h("td", { class: "num" }, x.uses),
-          h("td", {}, h("button", { class: "btn sm danger", onclick: async () => { await api("/api/fewshots/" + x.id, { method: "DELETE" }); loadFs(); } }, "Xóa"))))))))));
-  }
-  page.append(h("div", { class: "row" }, "Tập:", split, "Chế độ:", mode, runBtn, optBtn), out, hist, fsBox);
-  loadHist(); loadFs();
-  return page;
-}
-
-// ------------------------------------------------------------------ cài đặt
-function viewSettings() {
-  const page = h("div", { class: "page" }, h("h2", {}, S.simple ? "Cài đặt" : "Cài đặt hệ thống"), h("p", { class: "sub" }, S.simple ? "Chọn cách trợ lý hiểu câu hỏi (bộ luật có sẵn hoặc mô hình ngôn ngữ), ngưỡng phải duyệt trước khi chạy và số lần tự sửa lỗi." : "Chế độ LLM, ngưỡng HITL, tự sửa lỗi, tái sử dụng few-shot."));
-  api("/api/admin/settings").then(d => {
-    const s = d.settings;
-    const f = {
-      llm_mode: h("select", {}, ["auto", "claude", "openrouter", "offline"].map(x => h("option", { value: x, selected: s.llm_mode === x }, x))),
-      llm_model: h("input", { type: "text", value: s.llm_model }),
-      llm_effort: h("select", {}, ["low", "medium", "high", "xhigh", "max"].map(x => h("option", { value: x, selected: s.llm_effort === x }, x))),
-      always_review: h("input", { type: "checkbox", checked: s.always_review }),
-      max_repair_attempts: h("input", { type: "number", value: s.max_repair_attempts, min: 0, max: 6 }),
-      query_timeout_s: h("input", { type: "number", value: s.query_timeout_s, min: 1, max: 120 }),
-      fewshot_k: h("input", { type: "number", value: s.fewshot_k, min: 0, max: 10 }),
-      fewshot_reuse_threshold: h("input", { type: "number", value: s.fewshot_reuse_threshold, min: 0.5, max: 1, step: 0.01 }),
-      anchor_date: h("input", { type: "text", value: s.anchor_date || "", placeholder: "trống = ngày dữ liệu mới nhất" }),
-    };
-    const lab = { llm_mode: "Chế độ LLM (auto = Claude hoặc OpenRouter nếu có API key)", llm_model: "Model (tên Claude, hoặc dạng nhà-cung-cấp/tên cho OpenRouter)", llm_effort: "Effort (độ sâu suy luận)", always_review: "Luôn yêu cầu duyệt SQL trước khi chạy",
-      max_repair_attempts: "Số lần tự sửa SQL tối đa", query_timeout_s: "Timeout truy vấn (giây)", fewshot_k: "Số few-shot đưa vào prompt", fewshot_reuse_threshold: "Ngưỡng tái sử dụng SQL đã xác nhận (Jaccard)", anchor_date: "Ngày neo cho 'tháng này' (YYYY-MM-DD)" };
-    page.append(h("div", { class: "card" }, h("div", { class: "bd" },
-      h("div", { class: "callout " + (d.credentials ? "ok" : "warn"), style: { marginTop: 0, marginBottom: "12px" } }, d.credentials ? "✓ Đã phát hiện API key (Anthropic hoặc OpenRouter) — agent dùng LLM để hiểu câu hỏi." : "Chưa có API key — hệ thống chạy bằng bộ hiểu tiếng Việt offline. Đặt ANTHROPIC_API_KEY hoặc OPENROUTER_API_KEY trong file .env rồi khởi động lại để bật LLM."),
-      Object.entries(f).map(([k, el]) => h("div", { class: "row", style: { marginBottom: "10px" } }, h("label", { style: { width: "340px" } }, lab[k]), el)),
-      h("button", { class: "btn primary", onclick: async () => {
-        const values = {}; for (const [k, el] of Object.entries(f)) values[k] = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : (el.value || (k === "anchor_date" ? null : el.value));
-        await api("/api/admin/settings", { method: "PUT", body: { values } }); S.cfg = await api("/api/config"); renderTop(); toast("Đã lưu cài đặt");
-      } }, "Lưu"))),
-      h("div", { class: "card", style: { marginTop: "14px" } }, h("div", { class: "hd" }, h("b", {}, "Chính sách vai trò (config/policies.yml)")), h("div", { class: "bd" }, codeBlock(JSON.stringify(d.policies, null, 2)))));
-  });
-  return page;
+  const bg = h("div", { class: "modal-bg", onclick: e => { if (e.target === bg) bg.remove(); } });
+  const li = (b, t) => h("li", { style: { marginBottom: "6px" } }, h("b", {}, b), t);
+  bg.append(h("div", { class: "modal" }, h("h3", {}, "Cách dùng trợ lý"),
+    h("ol", { style: { paddingLeft: "18px", margin: 0 } },
+      li("Hỏi rõ 3 ý: ", "số gì (chỉ số), thời gian nào, chia theo gì. Ví dụ: “Doanh thu thuần theo kênh " + (anchorMonth() || "tháng 10/2026") + "”."),
+      li("Đọc dòng “Mình hiểu là”: ", "trợ lý nhắc lại cách hiểu. Bấm vào tên chỉ số để xem định nghĩa."),
+      li("Khi trợ lý hỏi lại: ", "một số từ (như “doanh thu”) có nhiều cách tính. Chọn một lần, trợ lý nhớ trong cả cuộc hội thoại."),
+      li("Bấm “📐 Cách tính”: ", "xem chỉ số đã dùng, các bước kiểm tra và câu lệnh SQL."),
+      li("Khi trợ lý xin duyệt: ", "câu hỏi đọc nhiều dữ liệu sẽ dừng lại để bạn xác nhận trước khi chạy.")),
+    h("div", { class: "sec small", style: { marginTop: "10px" } }, "Các công cụ khác (xem dữ liệu, tự viết SQL, lịch sử câu hỏi" + (S.user.can_manage_schema ? ", chất lượng dữ liệu, đo độ chính xác, cài đặt" : "") + ") nằm ở mục ", h("b", {}, "Công cụ"), " bên trái."),
+    h("div", { style: { textAlign: "right", marginTop: "12px" } }, h("button", { class: "btn primary", onclick: () => bg.remove() }, "Đã hiểu"))));
+  document.body.append(bg);
 }
 
 // ------------------------------------------------------------------ khung ứng dụng
-// label: tên ở chế độ Chuyên gia · plain: tên bằng lời thường ở chế độ Đơn giản · tip: trang này để làm gì
-const VIEWS = [
-  { id: "chat", label: "💬 Hỏi đáp dữ liệu", plain: "💬 Hỏi dữ liệu", tip: "Hỏi số liệu bằng tiếng Việt và nhận bảng, biểu đồ, lời giải thích", fn: viewChat },
-  { id: "console", label: "⌨️ SQL Console", plain: "⌨️ Tự viết SQL", tip: "Dành cho người biết SQL: tự viết truy vấn, hệ thống vẫn kiểm tra quyền và chi phí", fn: viewConsole },
-  { id: "schema", label: "📚 Schema & chỉ số", plain: "📚 Dữ liệu và chỉ số", tip: "Danh mục chỉ số, cách chia và các bảng dữ liệu hiện có", fn: viewSchema },
-  { id: "logs", label: "🧾 Nhật ký truy vấn", plain: "🧾 Lịch sử câu hỏi", tip: "Các câu đã hỏi, truy vấn đã chạy và kết quả", fn: viewLogs },
-  { id: "dq", label: "🩺 Chất lượng dữ liệu", plain: "🩺 Chất lượng dữ liệu", tip: "Các vấn đề của dữ liệu được phát hiện tự động và cách xử lý", fn: viewDQ, admin: true },
-  { id: "lineage", label: "🔀 Lineage", plain: "🔀 Nguồn gốc dữ liệu", tip: "Mỗi bảng, mỗi cột được tạo ra từ nguồn nào", fn: viewLineage, admin: true },
-  { id: "eval", label: "🎯 Đánh giá (Eval)", plain: "🎯 Đo độ chính xác", tip: "Chạy bộ câu hỏi kiểm tra để biết trợ lý trả lời đúng bao nhiêu", fn: viewEval, admin: true },
-  { id: "settings", label: "⚙️ Cài đặt", plain: "⚙️ Cài đặt", tip: "Chế độ trả lời, mô hình ngôn ngữ, ngưỡng duyệt", fn: viewSettings, admin: true },
-];
-function setSimple(on) { S.simple = on; store.set("ui_mode", on ? "simple" : "expert"); renderNav(); renderView(); }
-function renderTop() {
-  const t = $("#topbar"); if (!t) return;
-  const u = S.user, c = S.cfg;
-  const theme = document.documentElement.getAttribute("data-theme");
-  t.replaceChildren(
-    h("div", { class: "brand" }, "📊 " + ((c.profile || {}).assistant || "DATA-01"), h("small", { class: "hide-sm" }, (c.profile || {}).company || "AI Agent Text-to-SQL · Self-Service Analytics")),
-    h("span", { class: "spacer" }),
-    S.simple
-      ? h("span", { class: "badge hide-sm " + (c.mode === "offline" ? "info" : "ok"), title: c.mode === "offline" ? "Chưa bật mô hình ngôn ngữ: trợ lý trả lời bằng bộ luật có sẵn, hiểu được các câu hỏi về chỉ số đã định nghĩa." : "Trợ lý dùng mô hình ngôn ngữ " + c.model + " để hiểu câu hỏi; mọi truy vấn vẫn được kiểm tra bằng code." },
-          c.mode === "offline" ? "⚙️ Trả lời bằng bộ luật" : "🤖 Có mô hình ngôn ngữ")
-      : h("span", { class: "badge " + (c.mode === "offline" ? "info" : "ok"), title: "Chế độ sinh kế hoạch truy vấn" }, c.mode === "claude" ? "🤖 Claude · " + c.model : c.mode === "openrouter" ? "🤖 OpenRouter · " + c.model : "⚙️ Offline NLU (chưa có API key)"),
-    h("span", { class: "badge hide-sm", title: "Ngày mới nhất có dữ liệu trong kho" }, "Dữ liệu đến " + c.anchor),
-    S.simple
-      ? h("span", { class: "badge hide-sm", title: u.username + " · " + (u.role_label || u.role) + (u.rls && Object.keys(u.rls).length ? " · chỉ xem được một phần dữ liệu (" + rlsText(u) + ")" : "") }, "👤 " + (u.full_name || u.username) + (u.rls && Object.keys(u.rls).length ? " 🔒" : ""))
-      : h("span", { class: "badge", title: u.full_name }, "👤 " + u.username + " · " + (u.role === "admin" ? "Admin" : "Analyst") + (u.rls && Object.keys(u.rls).length ? " · RLS " + JSON.stringify(u.rls) : "")),
-    h("div", { class: "seg", title: "Đơn giản: lời thường, chi tiết kỹ thuật thu gọn. Chuyên gia: hiện ngay nhãn kỹ thuật và các tab SQL, kiểm duyệt, chi phí." },
-      h("button", { class: S.simple ? "on" : "", onclick: () => setSimple(true) }, "Đơn giản"),
-      h("button", { class: S.simple ? "" : "on", onclick: () => setSimple(false) }, "Chuyên gia")),
-    h("button", { class: "btn sm", title: "Hướng dẫn nhanh", onclick: showHelp }, "❓"),
-    h("button", { class: "btn sm", title: "Đổi giao diện sáng/tối", onclick: () => {
-      const cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-      const nx = cur === "dark" ? "light" : "dark"; document.documentElement.setAttribute("data-theme", nx); store.set("theme", nx); renderView();
-    } }, theme === "dark" ? "☀️" : "🌙"),
-    h("button", { class: "btn sm", onclick: logout }, "Đăng xuất"));
+function syncSend() { const ta = $("#ask"), b = $("#send"); if (b && ta) b.disabled = S.busy || !ta.value.trim(); }
+function closeRailSm() { const a = $(".app"); a && a.classList.remove("rail-open"); }
+function toggleRail() {
+  const a = $(".app");
+  if (matchMedia("(max-width: 820px)").matches) a.classList.toggle("rail-open");
+  else { a.classList.toggle("rail-closed"); store.set("v2_rail", a.classList.contains("rail-closed") ? "closed" : null); }
 }
-function renderNav() {
-  const n = $("#nav"); if (!n) return;
-  n.replaceChildren(...VIEWS.flatMap((v, i) => {
-    if (v.admin && !S.user.can_manage_schema) return [];
-    const sect = v.admin && !VIEWS.slice(0, i).some(x => x.admin) ? h("div", { class: "sect" }, "Quản trị (Admin)") : null;
-    return [sect, h("button", { class: S.view === v.id ? "active" : "", title: v.tip, onclick: () => { S.view = v.id; store.set("view", v.id); renderNav(); renderView(); } }, S.simple ? v.plain : v.label)];
-  }).filter(Boolean));
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const nx = cur === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", nx); store.set("theme", nx);
+  const b = $("#theme"); b && b.replaceChildren(icon(nx === "dark" ? "sun" : "moon"));
+  if (S.page) openPage(S.page); else if (S.conv) openConv(S.conv);        // vẽ lại biểu đồ theo màu mới
 }
-function renderView() {
-  S.charts.forEach(c => { try { c.destroy(); } catch (e) { /* ignore */ } }); S.charts = [];
-  const v = VIEWS.find(x => x.id === S.view && (!x.admin || S.user.can_manage_schema)) || VIEWS[0];
-  S.view = v.id;
-  $("#view").replaceChildren(v.fn());
-  renderTop();
+function layout() {
+  const u = S.user, c = S.cfg, p = c.profile || {};
+  const ta = h("textarea", { id: "ask", rows: 1, "aria-label": "Câu hỏi", placeholder: "Hỏi về số liệu, ví dụ: Doanh thu thuần theo kênh " + (anchorMonth() || "tháng này"),
+    oninput: e => { e.target.style.height = "auto"; e.target.style.height = Math.min(180, e.target.scrollHeight) + "px"; syncSend(); },
+    onkeydown: e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } } });
+  const submit = () => { const v = ta.value.trim(); if (!v || S.busy) return; ta.value = ""; ta.style.height = "auto"; syncSend(); send(v); };
+  const dark = (document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
+  const offline = c.mode === "none";        // chưa cấu hình khóa mô hình ngôn ngữ
+  const app = h("div", { class: "app" + (store.get("v2_rail") === "closed" ? " rail-closed" : "") },
+    h("aside", { class: "rail" },
+      h("div", { class: "rail-hd" }, h("div", { class: "logo" }, icon("logo")), h("div", { class: "brand" }, h("b", {}, p.assistant || "Trợ lý dữ liệu"), h("span", {}, p.company || ""))),
+      h("button", { class: "btn primary new", onclick: newConv }, "＋ Câu hỏi mới"),
+      h("div", { class: "rail-sect" }, "Gần đây"),
+      h("div", { class: "convlist", id: "convlist" }),
+      h("div", { class: "rail-sect" }, "Công cụ"),
+      h("nav", { class: "toolnav", id: "toolnav" }, pagesFor(u).map(pg => h("button", { "data-p": pg.id, onclick: () => openPage(pg.id) }, h("span", { class: "ic" }, pg.icon), pg.label))),
+      h("div", { class: "rail-ft" },
+        h("div", { class: "me" }, h("div", { class: "avatar" }, (callName(u) === "bạn" ? (u.full_name || u.username || "?") : callName(u)).trim().charAt(0).toUpperCase()),
+          h("div", { class: "who" }, h("b", {}, u.full_name || u.username), h("span", {}, (u.role_label || u.role) + (u.rls && Object.keys(u.rls).length ? " · 🔒 một phần dữ liệu" : "")))),
+        h("div", { class: "rail-links" },
+          h("button", { class: "btn ghost", onclick: logout }, "Đăng xuất")))),
+    h("main", { class: "main" },
+      h("div", { class: "topbar" },
+        h("button", { class: "icon-btn", title: "Ẩn/hiện danh sách hội thoại", "aria-label": "Menu", onclick: toggleRail }, icon("menu")),
+        h("div", { class: "title", id: "title" }, "Cuộc hội thoại mới"),
+        h("span", { class: "status hide-sm", title: offline ? "Chưa cấu hình mô hình ngôn ngữ (OPENROUTER_API_KEY): trợ lý chỉ trả lời được câu hỏi nêu rõ chỉ số và thời gian." : "Trợ lý dùng mô hình " + c.model + " để hiểu câu hỏi; câu rõ ràng được trả lời nhanh không cần mô hình; truy vấn luôn được kiểm tra bằng code." },
+          h("span", { class: "dot" + (offline ? " off" : "") }), offline ? "Chưa có mô hình ngôn ngữ" : "Có mô hình ngôn ngữ", " · dữ liệu đến " + (c.anchor || "")),
+        h("button", { class: "btn sm", title: "Định nghĩa của mọi chỉ số", onclick: () => openGlossary() }, icon("book"), h("span", { class: "hide-sm" }, "Từ điển")),
+        h("button", { class: "icon-btn", title: "Cách dùng", "aria-label": "Cách dùng", onclick: showHelp }, icon("help")),
+        h("button", { class: "icon-btn", id: "theme", title: "Đổi nền sáng/tối", "aria-label": "Đổi nền sáng/tối", onclick: toggleTheme }, icon(dark ? "sun" : "moon"))),
+      h("div", { class: "scroll", id: "scroll" }, h("div", { class: "thread", id: "thread" }, welcome()), h("div", { class: "page", id: "page", hidden: true })),
+      h("div", { class: "composer-wrap", id: "composer" },
+        h("div", { class: "composer" }, ta, h("div", { class: "bar" },
+          h("button", { class: "btn ghost sm", onclick: () => openGlossary(), title: "Xem tên các chỉ số để hỏi cho rõ" }, icon("book"), "Chỉ số"),
+          h("span", { class: "sp" }),
+          h("button", { class: "send", id: "send", title: "Gửi (Enter)", "aria-label": "Gửi", disabled: true, onclick: submit }, icon("send")))),
+        )));
+  $("#app").replaceChildren(app);
+  loadConvs();
+  const last = store.get("v2_conv"), pg = store.get("page");
+  if (pg && pagesFor(u).some(p => p.id === pg)) openPage(pg);
+  else if (last) openConv(last); else ta.focus();
 }
+
+// ------------------------------------------------------------------ trang công cụ (tools.js)
+function openPage(id) {
+  const pg = pagesFor(S.user).find(p => p.id === id); if (!pg) return;
+  S.page = id; store.set("page", id); closeRailSm(); closeDrawer(); destroyCharts();
+  $("#thread").hidden = true; $("#composer").hidden = true;
+  const box = $("#page"); box.hidden = false; box.replaceChildren(...[pg.fn()].flat(Infinity).filter(Boolean));
+  $("#scroll").scrollTop = 0;
+  setTitle(pg.icon + " " + pg.label);
+  [...$("#toolnav").children].forEach(b => b.classList.toggle("active", b.dataset.p === id));
+  document.querySelectorAll(".conv.active").forEach(c => c.classList.remove("active"));
+}
+// quay về khung hỏi đáp
+function closePage() {
+  if (!S.page) return;
+  S.page = null; store.set("page", null);
+  const box = $("#page"); box.hidden = true; box.replaceChildren();
+  $("#thread").hidden = false; $("#composer").hidden = false;
+  [...$("#toolnav").children].forEach(b => b.classList.remove("active"));
+}
+
+// ------------------------------------------------------------------ đăng nhập
 async function boot() {
   const th = store.get("theme"); if (th) document.documentElement.setAttribute("data-theme", th);
-  S.simple = store.get("ui_mode") !== "expert";       // mặc định: chế độ Đơn giản cho người mới
   S.token = store.get("token");
   if (!S.token) return renderLogin();
   try { S.user = await api("/api/me"); S.cfg = await api("/api/config"); } catch (e) { return renderLogin(); }
-  S.view = store.get("view") || "chat";
-  $("#app").replaceChildren(h("div", { class: "shell" }, h("div", { class: "topbar", id: "topbar" }), h("div", { class: "main" }, h("nav", { class: "nav", id: "nav" }), h("div", { class: "view", id: "view" }))));
-  renderNav(); renderView();
+  document.title = ((S.cfg.profile || {}).assistant || "Trợ lý dữ liệu");
+  layout();
 }
-function logout() { S.token = null; S.user = null; S.conv = null; store.set("token", null); renderLogin(); }
+function logout() { S.token = null; S.user = null; S.conv = null; S.page = null; store.set("page", null); store.set("token", null); store.set("v2_conv", null); closeDrawer(); renderLogin(); }
 async function renderLogin() {
-  // doanh nghiệp đang phục vụ và tài khoản demo lấy từ máy chủ (mỗi workspace một bộ), không gắn cứng trong giao diện
-  let pub = { company: "", industry: "", assistant: "Trợ lý phân tích dữ liệu", demo_users: [] };
-  try { pub = await (await fetch("/api/public")).json(); } catch (e) { /* máy chủ cũ: dùng mặc định */ }
+  let pub = { company: "", industry: "", assistant: "Trợ lý dữ liệu", demo_users: [] };
+  try { pub = await (await fetch("/api/public")).json(); } catch (e) { /* dùng mặc định */ }
   const first = (pub.demo_users || []).find(x => !x.rls && x.username !== "admin") || (pub.demo_users || [])[0] || {};
-  const u = h("input", { type: "text", placeholder: "Tên đăng nhập", value: first.username || "", style: { width: "100%" } });
-  const p = h("input", { type: "password", placeholder: "Mật khẩu", value: first.password || "", style: { width: "100%", marginTop: "8px" } });
+  const u = h("input", { type: "text", placeholder: "Tên đăng nhập", value: first.username || "", autocomplete: "username", "aria-label": "Tên đăng nhập" });
+  const pw = h("input", { type: "password", placeholder: "Mật khẩu", value: first.password || "", autocomplete: "current-password", "aria-label": "Mật khẩu" });
   const err = h("div", {});
-  const go = async (un, pw) => {
-    try { const r = await api("/api/login", { body: { username: un, password: pw } }); S.token = r.token; store.set("token", r.token); boot(); }
-    catch (e) { err.replaceChildren(h("div", { class: "callout err" }, e.message)); }
+  const go = async (un, p) => {
+    try { const r = await api("/api/login", { body: { username: un, password: p } }); S.token = r.token; store.set("token", r.token); boot(); }
+    catch (e) { err.replaceChildren(h("div", { class: "note bad" }, e.message)); }
   };
-  p.onkeydown = e => { if (e.key === "Enter") go(u.value, p.value); };
-  const q = (un, pw, title, desc) => h("button", { class: "btn", onclick: () => go(un, pw) }, h("b", {}, title), h("span", {}, desc));
-  $("#app").replaceChildren(h("div", { class: "login" }, h("div", { class: "card" }, h("div", { class: "bd" },
-    h("h1", {}, "📊 " + (pub.assistant || "Trợ lý phân tích dữ liệu")),
-    h("div", { class: "sec" }, "Hỏi số liệu bằng tiếng Việt" + (pub.company ? " trên dữ liệu của " + pub.company : "") +
-      (pub.industry ? " (" + pub.industry + ")" : "") + "." + ((pub.demo_users || []).length ? " Dữ liệu giả lập, đăng nhập bằng tài khoản demo:" : "")),
-    h("div", { style: { marginTop: "14px" } }, u, p, h("button", { class: "btn primary", style: { width: "100%", marginTop: "10px" }, onclick: () => go(u.value, p.value) }, "Đăng nhập")), err,
-    h("div", { class: "quick" }, (pub.demo_users || []).map(x =>
-      q(x.username, x.password, x.full_name, x.role_label + (x.rls ? " · chỉ thấy một phần dữ liệu" : ""))))))));
+  pw.onkeydown = e => { if (e.key === "Enter") go(u.value, pw.value); };
+  $("#app").replaceChildren(h("div", { class: "login" }, h("div", { class: "login-card" },
+    h("div", { class: "logo" }, icon("logo")),
+    h("h1", {}, pub.assistant || "Trợ lý dữ liệu"),
+    h("div", { class: "sec" }, "Hỏi số liệu bằng tiếng Việt" + (pub.company ? " trên dữ liệu của " + pub.company : "") + "."),
+    h("div", { class: "field" }, u), h("div", { class: "field" }, pw),
+    h("button", { class: "btn primary", style: { width: "100%", justifyContent: "center", marginTop: "12px" }, onclick: () => go(u.value, pw.value) }, "Đăng nhập"), err,
+    (pub.demo_users || []).length ? [h("div", { class: "muted small", style: { marginTop: "16px" } }, "Dữ liệu giả lập. Đăng nhập nhanh bằng tài khoản demo:"),
+      h("div", { class: "demo" }, pub.demo_users.map(x => h("button", { onclick: () => go(x.username, x.password) }, h("b", {}, x.full_name), h("span", {}, x.role_label + (x.rls ? " · một phần dữ liệu" : "")))))] : null,
+    )));
 }
-boot();
+document.addEventListener("DOMContentLoaded", boot);     // chờ tools.js nạp xong

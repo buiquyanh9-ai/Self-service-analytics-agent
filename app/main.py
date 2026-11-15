@@ -7,11 +7,11 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, config, cost, dq, evals, llm, profile, sqlcheck
+from . import auth, config, conv_eval, cost, dq, evals, llm, profile, sqlcheck
 from .agent import SAMPLE_QUESTIONS, get_agent
 from .auth import current_user, require_admin
 from .catalog import get_catalog
@@ -81,6 +81,11 @@ class EvalIn(BaseModel):
     mode: str | None = None
 
 
+class ConvEvalIn(BaseModel):
+    judge: bool = True
+    ids: list[str] | None = None
+
+
 # ------------------------------------------------------------------ auth
 @app.post("/api/login")
 def login(body: LoginIn):
@@ -118,10 +123,11 @@ def app_config(user: UserCtx = Depends(current_user)):
     st = get_store().get_settings()
     sem = get_semantic()
     return {"samples": SAMPLE_QUESTIONS, "mode": llm.resolve_mode(st), "llm_mode_setting": st["llm_mode"],
-            "credentials": llm.any_credentials(), "model": llm.effective_model(st), "always_review": st["always_review"],
+            "credentials": llm.any_credentials(), "model": llm.effective_model(st), "router_model": llm.router_model(st, llm.resolve_mode(st)), "always_review": st["always_review"],
             "anchor": get_catalog().anchor_date(), "profile": profile.public_summary(),
             "workspace": config.WORKSPACE or "(mặc định)", "workspaces": [w or "(mặc định)" for w in config.list_workspaces()],
-            "metrics": [{"name": n, "label": m["label"], "owner": m.get("owner")} for n, m in sem.metrics.items()],
+            "metrics": [{"name": n, "label": m["label"], "owner": m.get("owner"), "description": m.get("description") or "",
+                         "format": m.get("format") or ""} for n, m in sem.metrics.items()],
             "dimensions": [{"name": n, "label": d["label"]} for n, d in sem.dims.items()],
             "cost": user.role_cfg.get("cost"), "hitl": config.policies().get("hitl")}
 
@@ -233,6 +239,65 @@ def schema(user: UserCtx = Depends(current_user)):
     return {"tables": tables, "metrics": metrics, "dimensions": dims}
 
 
+# ------------------------------------------------------------------ xem dữ liệu đầu vào
+LAYER_LABEL = {"raw": "Dữ liệu nguồn (raw)", "ref": "Danh mục tham chiếu (ref)", "stg": "Dữ liệu đã chuẩn hóa (staging)"}
+
+
+@app.get("/api/data")
+def data_tables(user: UserCtx = Depends(current_user)):
+    """Danh sách bảng người dùng được xem dữ liệu, nhóm theo tầng (nguồn → chuẩn hóa → kho phục vụ)."""
+    cat, role = get_catalog(), user.role_cfg
+    serving = profile.serving_schema()
+    order = {"raw": 0, "ref": 1, "stg": 2}
+    tabs = sorted(cat.visible_tables(role), key=lambda t: (order.get(t["schema"], 3 if t["schema"] == serving else 4), t["name"]))
+    return {"serving_schema": serving, "anchor": cat.anchor_date(), "data_start": cat.data_start(),
+            "tables": [{"name": t["name"], "schema": t["schema"], "rows": t["rows"], "bytes": t["bytes"],
+                        "description": t["description"], "n_columns": len(t["columns"]),
+                        "layer": LAYER_LABEL.get(t["schema"]) or ("Kho dữ liệu phân tích (" + t["schema"] + ")")} for t in tabs]}
+
+
+@app.get("/api/data/{table}")
+def data_preview(table: str, limit: int = 50, offset: int = 0, q: str | None = None,
+                 user: UserCtx = Depends(current_user)):
+    """Xem các dòng dữ liệu của một bảng. Đi qua cùng chốt kiểm duyệt với mọi truy vấn: schema theo vai trò,
+    bỏ cột bị hạn chế (PII/mật), tiêm RLS — nên người dùng chỉ thấy đúng phần dữ liệu mình được phép."""
+    from .warehouse import QueryError, get_warehouse
+    cat, role = get_catalog(), user.role_cfg
+    fq = cat.resolve(table)
+    if not fq or cat.get(fq)["schema"] not in role.get("schemas", []):
+        raise HTTPException(404, "Bảng không tồn tại hoặc tài khoản của bạn không được xem bảng này.")
+    t = cat.get(fq)
+    deny = set(role.get("deny_sensitivity", []))
+    cols = [c for c, x in t["columns"].items() if x.get("sensitivity") not in deny]
+    hidden = [c for c in t["columns"] if c not in cols]
+    if not cols:
+        raise HTTPException(403, "Mọi cột của bảng này đều bị hạn chế với vai trò của bạn.")
+    limit, offset = max(1, min(int(limit), 200)), max(0, int(offset))
+    where = ""
+    if q and q.strip():       # tìm nhanh: chứa chuỗi ở bất kỳ cột nào được phép xem
+        lit = "'%" + q.strip().replace("'", "''").replace("%", "").replace("_", "\\_")[:80] + "%'"
+        where = " WHERE " + " OR ".join(f'CAST("{c}" AS VARCHAR) ILIKE {lit} ESCAPE \'\\\'' for c in cols)
+    part = (t.get("partition") or {}).get("column")
+    # mới nhất trước (theo cột phân vùng), rồi theo mọi cột còn lại để phân trang ổn định (không lặp/sót dòng)
+    keys = ([f'"{part}" DESC'] if part in cols else []) + [f'"{c}"' for c in cols if c != part]
+    order = " ORDER BY " + ", ".join(keys)
+    sel = ", ".join(f'"{c}"' for c in cols)
+    sql = f"SELECT {sel} FROM {fq}{where}{order} LIMIT {limit} OFFSET {offset}"
+    v = validate(sql, user, max_rows=limit, dry_run=False)
+    if not v.ok:
+        raise HTTPException(403, v.errors[0]["message"])
+    vc = validate(f"SELECT COUNT(*) AS n FROM {fq}{where}", user, dry_run=False)
+    try:
+        res = get_warehouse().execute(v.sql_exec, max_rows=limit)
+        total = get_warehouse().scalar(vc.sql_exec) if vc.ok else None
+    except QueryError as e:
+        raise HTTPException(400, str(e))
+    meta = [{"name": c, "type": t["columns"][c]["type"], "description": t["columns"][c].get("description") or ""} for c in res["columns"]]
+    return {"table": fq, "description": t["description"], "grain": t.get("grain"), "columns": meta, "rows": res["rows"],
+            "total": total, "limit": limit, "offset": offset, "hidden_columns": hidden, "rls_applied": bool(v.rls_applied),
+            "elapsed_ms": res["elapsed_ms"]}
+
+
 @app.put("/api/admin/catalog")
 def update_catalog(body: CatalogIn, user: UserCtx = Depends(require_admin)):
     get_store().set_override(body.key, body.description, body.synonyms, user.username)
@@ -320,7 +385,9 @@ def lineage_column(col: str, user: UserCtx = Depends(require_admin)):
 # ------------------------------------------------------------------ eval & few-shot
 @app.get("/api/eval")
 def eval_list(user: UserCtx = Depends(require_admin)):
-    return {"runs": get_store().list_evals(), "questions": evals.load_questions()}
+    return {"runs": get_store().list_evals(), "questions": evals.load_questions(),
+            "conversations": [{"id": c["id"], "name": c.get("name"), "tags": c.get("tags", []), "turns": len(c["turns"])}
+                              for c in conv_eval.load_scenarios()]}
 
 
 @app.get("/api/eval/{eid}")
@@ -347,6 +414,28 @@ def eval_optimize(body: EvalIn, user: UserCtx = Depends(require_admin)):
         raise HTTPException(409, "Đang có một lượt eval chạy")
     try:
         return evals.optimize(body.mode)
+    finally:
+        _eval_lock.release()
+
+
+@app.post("/api/eval/conversations")
+def eval_conversations(body: ConvEvalIn, user: UserCtx = Depends(require_admin)):
+    """Eval hội thoại: kiểm tra bằng code + mô hình chấm từng lượt."""
+    if not _eval_lock.acquire(blocking=False):
+        raise HTTPException(409, "Đang có một lượt eval chạy")
+    try:
+        return conv_eval.run_conversations(judge=body.judge, ids=body.ids)
+    finally:
+        _eval_lock.release()
+
+
+@app.post("/api/eval/ablation")
+def eval_ablation(body: ConvEvalIn, user: UserCtx = Depends(require_admin)):
+    """Chạy eval hội thoại với từng tính năng bị tắt để so sánh đóng góp của mỗi tính năng."""
+    if not _eval_lock.acquire(blocking=False):
+        raise HTTPException(409, "Đang có một lượt eval chạy")
+    try:
+        return conv_eval.ablation(judge=body.judge, ids=body.ids)
     finally:
         _eval_lock.release()
 
@@ -383,4 +472,12 @@ app.mount("/static", StaticFiles(directory=str(config.WEB)), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(str(config.WEB / "index.html"))
+    # no-cache để trình duyệt luôn lấy index.html mới (file JS/CSS có số phiên bản trong đường dẫn)
+    return FileResponse(str(config.WEB / "index.html"), headers={"Cache-Control": "no-cache"})
+
+
+# đường dẫn của các bản giao diện cũ: chuyển về trang chủ
+@app.get("/v2")
+@app.get("/classic")
+def old_ui():
+    return RedirectResponse("/", status_code=308)
