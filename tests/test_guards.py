@@ -8,11 +8,12 @@ import json
 import pytest
 
 from app import llm
-from app.agent import get_agent
+from app.agent import Agent, get_agent
 from app.governance import UserCtx
 from app.nlu import get_nlu, is_why_question
 from app.semantic import SemanticError, get_semantic
 from app.store import get_store
+from fake_llm import FakeLLM
 
 ADMIN = UserCtx("admin", "admin", {})
 CTX = {"anchor": "2026-11-09", "role": "analyst", "rls": {}, "memory": {}, "fewshots": "(chưa có)"}
@@ -26,14 +27,23 @@ class FakeClient:
         self.answer, self.contexts = answer, []
         self.usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "calls": 1}
 
-    def plan(self, question, context, tool_impl, max_turns=8, trace=None):
+    def plan(self, question, context, tool_impl, max_turns=8, trace=None, check=None):
         self.contexts.append(context)
         return self.answer(tool_impl) if callable(self.answer) else self.answer
+
+    def route(self, question, context):         # Router giả: phân loại như một mô hình làm đúng việc
+        return FakeLLM().route(question, context)
+
+
+def _llm_only(monkeypatch, client):
+    """Các test dưới đây kiểm tra cách agent xử lý đầu ra của Planner: tắt đường nhanh để câu nào cũng tới Planner."""
+    monkeypatch.setattr(llm, "get_client", lambda settings, mode, role="main": client)
+    monkeypatch.setattr(Agent, "_fast_path", lambda self, s, q: None)
 
 
 def ask(monkeypatch, question, answer, memory=None, clarification=None):
     client = FakeClient(answer)
-    monkeypatch.setattr(llm, "get_client", lambda settings, mode: client)
+    _llm_only(monkeypatch, client)
     store = get_store()
     cid = store.create_conversation("admin", "test")
     if memory:
@@ -240,7 +250,7 @@ def test_llm_mode_asks_back_without_calling_the_model(monkeypatch):
 def test_chosen_definition_is_passed_to_the_model_as_a_hint(monkeypatch):
     store, agent = get_store(), get_agent()
     client = FakeClient({"intent": "metric_query", "kind": "semantic", "semantic_plan": {"metrics": ["doanh_thu_gop"]}})
-    monkeypatch.setattr(llm, "get_client", lambda settings, mode: client)
+    _llm_only(monkeypatch, client)
     cid = store.create_conversation("admin", "test")
     try:
         first = agent.ask(ADMIN, cid, "Doanh thu tháng trước là bao nhiêu?", eval_mode=True, mode="openrouter")
@@ -257,9 +267,12 @@ def test_rule_draft_reports_the_words_it_did_not_use():
     clean = nlu.draft_for_llm("Doanh thu thuần theo miền tháng 9/2026")
     assert clean["plan"]["metrics"] == ["doanh_thu_thuan"] and clean["plan"]["dimensions"] == ["vung"] and clean["unparsed"] == []
     assert nlu.draft_for_llm("Doanh thu thuần theo quý năm 2025 so với cùng kỳ")["unparsed"] == []
-    partial = nlu.draft_for_llm("Top 10 khách hàng có doanh thu thuần cao nhất năm 2025")
-    assert partial["unparsed"] == ["khách", "hàng"]                      # bộ luật không có chiều "khách hàng"
-    assert "trung" in nlu.draft_for_llm("Số đơn trung bình mỗi ngày theo thứ trong tuần năm 2025")["unparsed"]
+    partial = nlu.draft_for_llm("Doanh thu thuần theo độ tuổi khách hàng năm 2025")
+    assert partial["unparsed"] == ["độ", "tuổi"]                         # bộ luật không có chiều "độ tuổi"
+    top = nlu.draft_for_llm("Top 10 khách hàng có doanh thu thuần cao nhất năm 2025")
+    assert top["unparsed"] == [] and top["plan"]["dimensions"] == ["khach_hang"] and top["plan"]["limit"] == 10
+    avg = nlu.draft_for_llm("Số đơn trung bình mỗi ngày theo thứ trong tuần năm 2025")
+    assert avg["unparsed"] == [] and avg["plan"]["per"] == "ngay" and avg["plan"]["dimensions"] == ["thu_trong_tuan"]
     assert nlu.draft_for_llm("Doanh thu tháng trước là bao nhiêu?") is None            # mơ hồ -> không nháp
     assert nlu.draft_for_llm("Vì sao doanh thu thuần tháng 9/2026 giảm?") is None       # câu "vì sao" đi nhánh riêng
 
@@ -271,10 +284,10 @@ def test_rule_draft_is_given_to_the_model_as_a_hint(monkeypatch):
                        {"intent": "metric_query", "kind": "semantic", "semantic_plan": plan})
     hint = client.contexts[0]["hints"][0]
     assert resp["type"] == "result" and '"dimensions": ["vung"]' in hint and "đã dùng hết" in hint
-    _, client = ask(monkeypatch, "Top 10 khách hàng có doanh thu thuần cao nhất năm 2025",
+    _, client = ask(monkeypatch, "Doanh thu thuần theo độ tuổi khách hàng năm 2025",
                     {"intent": "metric_query", "kind": "semantic", "semantic_plan": plan})
     partial = client.contexts[0]["hints"][0]
-    assert "MỘT PHẦN" in partial and "khách, hàng" in partial and "viết SQL" in partial
+    assert "MỘT PHẦN" in partial and "độ, tuổi" in partial and "viết SQL" in partial
 
 
 # ------------------------------------------------------------------ câu hỏi "vì sao"
@@ -311,7 +324,9 @@ def test_plain_comparison_labelled_variance_by_the_model_returns_the_comparison_
 
 
 def test_model_clarification_is_still_honoured_for_ordinary_questions(monkeypatch):
-    resp, _ = ask(monkeypatch, "Cửa hàng nào đáng chú ý nhất tháng 10/2026?",
+    # câu có từ bộ luật không biết ("phong độ ấn tượng") nên đi tới mô hình; câu bộ luật hiểu hết mà chỉ thiếu chỉ số
+    # thì code tự hỏi lại chỉ số (xem test_business::test_missing_metric_is_asked_back)
+    resp, _ = ask(monkeypatch, "Cửa hàng nào có phong độ ấn tượng nhất tháng 10/2026?",
                   {"intent": "metric_query", "kind": "clarify",
                    "clarification": {"question": "Theo tiêu chí nào?", "options": [{"label": "Doanh thu thuần", "metric": "doanh_thu_thuan"},
                                                                                     {"label": "Số đơn", "metric": "so_don"}]}})

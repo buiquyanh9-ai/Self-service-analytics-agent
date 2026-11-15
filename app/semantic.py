@@ -121,6 +121,24 @@ class Semantic:
                     return table, col
         return None
 
+    def data_window(self, metrics: list[str]) -> tuple[str, str] | None:
+        """Khoảng ngày có dữ liệu (min, max) của các model chứa các chỉ số, theo thống kê catalog của cột thời gian."""
+        lo = hi = None
+        for m in metrics or []:
+            if m not in self.metrics:
+                continue
+            for mdl in self.metric_models(m):
+                md = self.models[mdl]
+                alias, _, col = (md.get("time_column") or "").partition(".")
+                table = md["table"] if md.get("alias") == alias else ((md.get("joins") or {}).get(alias) or {}).get("table")
+                c = ((get_catalog().get(table) or {}).get("columns") or {}).get(col) if table else None
+                if not c or not c.get("min") or not c.get("max"):
+                    continue
+                a, b = str(c["min"])[:10], str(c["max"])[:10]
+                lo = a if lo is None or a < lo else lo
+                hi = b if hi is None or b > hi else hi
+        return (lo, hi) if lo and hi else None
+
     def dim_values(self, dim: str) -> list[str]:
         loc = self.dim_column(dim)
         if not loc:
@@ -130,7 +148,7 @@ class Semantic:
     # ------------------------------------------------------------------ biên dịch 1 model
     def _model_query(self, model: str, metric_names: list[str], dims: list[str], filters: list[dict],
                      time_range: dict | None, having: list[dict] | None = None, notes: list | None = None,
-                     with_components: bool = True) -> tuple[str, list[str]]:
+                     with_components: bool = True, per: str | None = None) -> tuple[str, list[str]]:
         mdl = self.models[model]
         a = mdl["alias"]
         notes = notes if notes is not None else []
@@ -152,7 +170,9 @@ class Semantic:
             e = self.metrics[b]["sql"]
             f = filt[b]
             if f and f != common:
-                return f"{e} FILTER (WHERE {f})" if not e.upper().startswith("COUNT(*) FILTER") else e
+                e = f"{e} FILTER (WHERE {f})" if not e.upper().startswith("COUNT(*) FILTER") else e
+            if per:     # trung bình mỗi ngày/tuần/tháng: tổng chia số kỳ có phát sinh
+                e = f"{e} * 1.0 / NULLIF(COUNT(DISTINCT {time_expr(GRAIN_OF_DIM[per], mdl['time_column'])}), 0)"
             return e
 
         select, used_aliases = [], set()
@@ -213,6 +233,9 @@ class Semantic:
             else:
                 where.append(f"{tcol} = (SELECT MAX({c2}) FROM {t2}{sw})")
             notes.append(f"{mdl['label']} là chỉ số semi-additive: lấy ảnh chụp ngày chốt cuối cùng của mỗi kỳ.")
+        for d in dims:          # chiều theo mã người (khách hàng, nhân viên): bỏ dòng không có mã (khách vãng lai...)
+            if self.dims[d].get("exclude_null"):
+                where.append(f"{self.dim_expr(model, d)} IS NOT NULL")
         for f in filters:
             d = f["dimension"]
             e = self.dim_expr(model, d)
@@ -244,7 +267,8 @@ class Semantic:
         for h in having or []:
             mm = h["metric"]
             if mm in self.metrics and self.metrics[mm].get("model") == model:
-                hv.append(f"{agg(mm)} {OPS.get(h.get('op', '>'), '>')} {float(h['value']):.0f}")
+                v = float(h["value"])
+                hv.append(f"{agg(mm)} {OPS.get(h.get('op', '>'), '>')} {f'{v:.0f}' if v.is_integer() else repr(v)}")
         if hv:
             sql += "\nHAVING " + " AND ".join(hv)
         return sql, out_cols
@@ -359,6 +383,7 @@ class Semantic:
     def compile(self, plan: dict) -> dict:
         p = self.validate_plan(plan)
         notes: list[str] = []
+        self._check_per(p, notes)
         metrics, dims, filters = p["metrics"], p["dimensions"], p["filters"]
         if p.get("compare"):
             return self._compile_compare(p, notes)
@@ -370,12 +395,42 @@ class Semantic:
                     by_model[mdl].append(m)
         if len(by_model) == 1:
             model = next(iter(by_model))
-            sql, cols = self._model_query(model, metrics, dims, filters, p.get("time_range"), p.get("having"), notes)
+            sql, cols = self._model_query(model, metrics, dims, filters, p.get("time_range"), p.get("having"), notes,
+                                          per=p.get("per"))
+            done = [h for h in p["having"] if self._having_in_model(h, model)]
         else:
             sql, cols = self._multi_model(by_model, metrics, dims, filters, p.get("time_range"), notes)
+            done = []
+        rest = [h for h in p["having"] if h not in done and h["metric"] in cols]
+        if rest:    # điều kiện trên chỉ số dẫn xuất / nhiều model: lọc trên kết quả đã tính
+            cond = " AND ".join(f"x.{h['metric']} {OPS.get(h.get('op', '>'), '>')} {float(h['value'])!r}" for h in rest)
+            sql = f"SELECT *\nFROM (\n{_indent(sql)}\n) x\nWHERE {cond}"
         sql += self._order_limit(p, dims, cols)
         return {"sql": sql, "columns": self.columns_meta(cols, p), "notes": notes, "models": sorted(by_model),
                 "plan": p}
+
+    def _having_in_model(self, h: dict, model: str) -> bool:
+        m = self.metrics.get(h.get("metric")) or {}
+        return m.get("type") != "derived" and m.get("model") == model
+
+    def _check_per(self, p: dict, notes: list) -> None:
+        """'Trung bình mỗi ngày/tuần/tháng' chỉ có nghĩa với chỉ số cộng dồn được, tính trên một loại dữ liệu."""
+        per = p.get("per")
+        if not per:
+            return
+        ms = p["metrics"]
+        models = {mdl for m in ms for mdl in self.metric_models(m)}
+        ok = per in GRAIN_OF_DIM and len(models) == 1 and all(
+            self.metrics[m].get("type") != "derived" and self.metrics[m].get("additive", True)
+            and self.metrics[m].get("format") != "percent" for m in ms)
+        mdl = self.models[next(iter(models))] if len(models) == 1 else {}
+        if ok and (mdl.get("semi_additive") or TIME_GRAINS.index(GRAIN_OF_DIM[per])
+                   < TIME_GRAINS.index(mdl.get("time_grain_min", "day"))):
+            ok = False
+        if not ok:
+            p["per"] = None
+            notes.append("Chỉ số này không tính trung bình theo kỳ được (tỷ lệ, chỉ số dẫn xuất, ảnh chụp tồn kho hoặc dữ liệu "
+                         "chi tiết thô hơn) — hiển thị giá trị của cả kỳ.")
 
     def _multi_model(self, by_model, metrics, dims, filters, time_range, notes):
         ctes, cte_cols = [], {}
@@ -430,7 +485,7 @@ class Semantic:
         for label, tr in (("ky_nay", p.get("time_range")), ("ky_truoc", p["compare"])):
             if len(models) == 1:
                 sql, cols = self._model_query(models[0], [metric], dims, p["filters"], tr, None, notes,
-                                              with_components=False)
+                                              with_components=False, per=p.get("per"))
             else:
                 sql, cols = self._multi_model({m: [metric] for m in models}, [metric], dims, p["filters"], tr, notes)
             parts[label] = sql
@@ -474,6 +529,8 @@ class Semantic:
         out = []
         tr = (p.get("time_range") or {}).get("label")
         cmp_label = (p.get("compare") or {}).get("label")
+        per_label = {"ngay": " (TB mỗi ngày)", "tuan": " (TB mỗi tuần)", "thang": " (TB mỗi tháng)", "quy": " (TB mỗi quý)",
+                     "nam": " (TB mỗi năm)"}.get(p.get("per") or "", "")
         for c in cols:
             if c in self.dims:
                 d = self.dims[c]
@@ -481,14 +538,14 @@ class Semantic:
                             "time": d.get("kind") == "time", "format": "text"})
             elif c in self.metrics:
                 m = self.metrics[c]
-                out.append({"name": c, "label": m["label"], "kind": "metric", "format": m.get("format", "number"),
-                            "additive": m.get("additive", m.get("type") != "derived" and m.get("format") != "percent")})
+                out.append({"name": c, "label": m["label"] + per_label, "kind": "metric", "format": m.get("format", "number"),
+                            "additive": not per_label and m.get("additive", m.get("type") != "derived" and m.get("format") != "percent")})
             elif c.endswith("_ky_nay") or c.endswith("_ky_truoc"):
                 base = c.rsplit("_ky_", 1)[0]
                 m = self.metrics[base]
                 which = "kỳ này" if c.endswith("_ky_nay") else "kỳ trước"
                 lab = tr if c.endswith("_ky_nay") else cmp_label
-                out.append({"name": c, "label": f"{m['label']} ({lab or which})", "kind": "metric",
+                out.append({"name": c, "label": f"{m['label']}{per_label} ({lab or which})", "kind": "metric",
                             "format": m.get("format", "number"), "period": which,
                             "additive": m.get("additive", m.get("type") != "derived")})
             elif c == "chenh_lech":

@@ -1,6 +1,9 @@
 """
 Agent Text-to-SQL đa tác tử, điều phối bằng đồ thị trạng thái (tương đương LangGraph StateGraph):
 
+  planner = chốt chặn bằng code ─► đường nhanh (bộ luật hiểu trọn câu) ─► Router (LLM: ý định, viết lại câu hỏi
+            độc lập, tách câu nhiều ý) ─► đường nhanh trên câu đã viết lại ─► Planner (LLM gọi tool)
+
   load_context ─► planner ─┬─► clarify ─────────────────────────────────────────────┐
                            ├─► responder (định nghĩa chỉ số / schema / DQ / trợ giúp) ┤
                            ├─► variance_analyst (vì sao tăng/giảm) ──────────────────┤
@@ -24,9 +27,11 @@ import re
 import time
 import uuid
 
-from . import config, cost, dq, explain, llm, profile, repair, sqlcheck
+from concurrent.futures import ThreadPoolExecutor
+
+from . import config, cost, critic, dq, explain, llm, lookup, profile, repair, sqlcheck
 from .catalog import get_catalog
-from .governance import UserCtx, validate
+from .governance import UserCtx, restricted_request, validate
 from .nlu import get_nlu, is_why_question
 from .retriever import get_retriever
 from .semantic import SemanticError, get_semantic
@@ -35,7 +40,33 @@ from .textutil import fmt_money, human_bytes, norm
 from .warehouse import QueryError, get_warehouse
 
 END = "__end__"
-INFO_INTENTS = {"metric_info", "schema_info", "dq", "help", "unknown"}
+NARRATE_RESERVE_S = 3.5     # thời gian dành cho lượt gọi viết lời diễn giải (model nhanh) trong ngân sách mỗi câu
+# từ hỏi nguyên nhân/chiều biến động mà bộ luật không đánh dấu là đã dùng, nhưng không đổi nghĩa câu "vì sao"
+WHY_WORDS = {"vi", "sao", "tai", "giam", "tang", "bien", "dong", "nguyen", "nhan", "ly", "do", "lai", "vay", "the", "nao",
+             "a", "nhi", "sut", "manh", "di", "len", "xuong", "nhu", "the"}
+# câu nối tiếp chỉ đòi chia theo một chiều ("chia theo kênh bán") mà không hỏi nguyên nhân: trả bảng chia, không phân tích
+# "vì sao" lại dù Router viết lại câu thành câu "vì sao ... chia theo ..." do lượt trước là câu vì sao
+CAUSE_RE = re.compile(r"\b(vi sao|tai sao|nguyen nhan|ly do|do dau|sao lai|giai thich|vi dau)\b")
+BREAKDOWN_RE = re.compile(r"^(chia|phan|tach|xem|cho xem|nhom)?\s*theo\b|\b(chia|phan|tach|nhom) theo\b")
+
+
+def _breakdown_only(msg: str) -> bool:
+    m = norm(msg or "")
+    return bool(BREAKDOWN_RE.search(m)) and not CAUSE_RE.search(m)
+
+
+CRITIC_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="critic")   # LLM chấm chạy song song với lượt viết lời
+MULTI_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="task")       # các ý của câu nhiều ý chạy song song
+MAX_TASKS = 4
+SPEC_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="spec")       # Planner chạy đón trước song song Router
+CRITIC_WAIT_S = 6.0         # chờ LLM chấm tối đa từng này giây sau khi đã có lời diễn giải
+# trạng thái của một lần lập kế hoạch + chạy truy vấn; Critic yêu cầu làm lại thì xóa, làm lại lỗi thì khôi phục
+PLAN_KEYS = ("plan", "sql", "sql_source", "columns_meta", "result", "facts", "template", "text", "highlights", "chart",
+             "audit", "validation", "_v", "lint", "cost", "metrics_matched", "lineage", "attempts", "repairs", "executed",
+             "empty_result", "narrator", "intent", "chart_hint", "status", "error", "last_error", "assumptions", "notes",
+             "critic_issues", "variance")
+MULTI_CLAUSE_RE = re.compile(r";|,\s*(va|roi|con|them|kem|dong thoi|ngoai ra|sau do)\b|\b(them nua|ngoai ra|dong thoi|sau do|"
+                             r"kem theo|kem luon)\b|\b(va|roi) (vi sao|tai sao|top|cho (minh|toi|em))\b")
 NON_REPAIRABLE = {"FORBIDDEN_STATEMENT", "FORBIDDEN_FUNCTION", "FORBIDDEN_SCHEMA", "FORBIDDEN_COLUMN", "MULTI_STATEMENT", "EMPTY"}
 
 
@@ -74,7 +105,7 @@ class Agent:
         self.store = get_store()
         self.graph = Graph()
         for n in ("load_context", "planner", "clarify", "responder", "variance_analyst", "sql_generator", "optimizer",
-                  "validator", "repairer", "cost_guard", "executor", "analyst", "explainer", "finalize"):
+                  "validator", "repairer", "cost_guard", "executor", "analyst", "explainer", "critic", "multi", "finalize"):
             self.graph.add(n, getattr(self, "n_" + n))
         self._seed_fewshots()
 
@@ -122,7 +153,7 @@ class Agent:
             return {"type": "error", "text": "Chỉ người tạo truy vấn (hoặc Admin) được duyệt."}
         s = self.new_state(user, p["conversation_id"], st["question"])
         for k in ("plan", "sql", "sql_source", "columns_meta", "intent", "assumptions", "notes", "chart_hint", "repairs",
-                  "attempts", "mode", "console"):
+                  "attempts", "mode", "console", "lookup", "lookup_built"):
             if k in st:
                 s[k] = st[k]
         s["run_id"] = run_id
@@ -149,8 +180,8 @@ class Agent:
         conv = self.store.get_conversation(s["conversation_id"]) or {"memory": {}}
         s["memory"] = conv.get("memory") or {}
         s["settings"] = self.store.get_settings()
-        s.setdefault("mode", None)
-        s["mode"] = s.get("force_mode") or s.get("mode") or llm.resolve_mode(s["settings"])
+        forced = s.get("force_mode") if s.get("force_mode") in llm.LLM_MODES else None
+        s["mode"] = forced or (s.get("mode") if s.get("mode") in llm.LLM_MODES else None) or llm.resolve_mode(s["settings"])
         s["anchor"] = dt.date.fromisoformat(get_catalog().anchor_date())
         if skip_clarify:
             return "planner"
@@ -181,72 +212,375 @@ class Agent:
         return "planner"
 
     def n_planner(self, s):
+        """Thứ tự: chốt chặn bằng code -> đường nhanh (bộ luật hiểu TRỌN VẸN câu hỏi, không gọi LLM) -> Router (LLM phân
+        loại ý định, viết lại câu hỏi độc lập, tách câu nhiều ý) -> chốt chặn + đường nhanh trên câu đã viết lại -> SQL đã
+        xác nhận -> Planner (LLM gọi tool). Không còn chế độ offline: câu bộ luật chỉ hiểu một phần luôn đi qua LLM."""
         q = s["question"]
-        ret = get_retriever()
-        # 0) "bạn là gì / hỗ trợ gì": trả lời từ hồ sơ doanh nghiệp, không gọi LLM nên không bịa tính năng
-        if not s.get("clarified") and profile.is_intro_question(q):
-            s["intent"] = "help"
-            s["_detail"] = "Câu hỏi giới thiệu: trả lời từ hồ sơ doanh nghiệp và semantic layer, không gọi LLM"
+        clarified = bool(s.get("clarified"))
+        # -1) chủ đề cấm: từ chối bằng code, trước mọi bước khác (không gọi LLM, không kế thừa ngữ cảnh)
+        hit = None if clarified else profile.blocked_topic(q)
+        if hit:
+            s["intent"], s["refused"] = "refused", True
+            s["info_text"] = profile.refusal_text()
+            s["suggestions"] = profile.sample_questions()[:4]
+            s["_detail"] = f"Từ chối: câu hỏi chạm chủ đề cấm (“{hit}”), không truy vấn dữ liệu"
             return "responder"
-        # 1) tái sử dụng SQL đã được xác nhận (học từ phản hồi)
-        if not s.get("clarified"):
-            hit =ret.reusable(q, threshold=float(s["settings"].get("fewshot_reuse_threshold", 0.8)))
-            if hit and hit.get("sql"):
-                s["sql"], s["sql_source"], s["intent"] = hit["sql"], "fewshot", "metric_query"
-                s["fewshot_hit"] = {"id": hit["id"], "question": hit["question"], "similarity": hit["similarity"], "source": hit["source"]}
-                self.store.touch_fewshot(hit["id"])
-                s["notes"].append(f"Tái sử dụng SQL đã được xác nhận cho câu hỏi tương tự: “{hit['question']}” "
-                                  f"(độ tương đồng {hit['similarity']:.2f}).")
-                s["_detail"] = f"Few-shot hit #{hit['id']} ({hit['source']})"
+        if not clarified:
+            # 0) giới thiệu / xã giao khớp mẫu chắc chắn: trả lời ngay từ hồ sơ doanh nghiệp
+            if profile.is_intro_question(q):
+                s["intent"] = "help"
+                s["_detail"] = "Câu hỏi giới thiệu: trả lời từ hồ sơ doanh nghiệp, không gọi LLM"
+                return "responder"
+            reply = profile.smalltalk_reply(q)
+            if reply:
+                s["intent"], s["info_text"] = "smalltalk", reply
+                s["_detail"] = "Câu xã giao: đáp ngắn, không truy vấn dữ liệu"
+                return "responder"
+            # 1) chốt chặn bằng code: sửa/xóa dữ liệu, cột bị hạn chế, dự báo, mốc thời gian sai, mã không có, tra cứu mã
+            nxt = self._code_guards(s, q)
+            if nxt:
+                return nxt
+        # 2) đường nhanh trên câu gốc
+        nxt = self._fast_path(s, q)
+        if nxt:
+            return nxt
+        if s["mode"] not in llm.LLM_MODES:
+            return self._no_llm(s)
+        # 3) Router (ý con của câu nhiều ý đã được Router của câu cha phân loại và viết thành câu độc lập)
+        if not clarified and not s.get("subtask"):
+            # câu có thuật ngữ mơ hồ sẽ được hỏi lại bằng code: không chạy đón trước (tốn lượt gọi vô ích)
+            if s["settings"].get("speculative_plan", True) and not get_nlu().detect_ambiguity(q, s["memory"]):
+                snap = dict(s, route_why=False, llm_trace=[])        # ảnh chụp trạng thái: luồng nền chỉ đọc
+                s["_spec"] = (q, SPEC_POOL.submit(self._call_planner, snap))
+            nxt = self._route(s)
+            if nxt:
+                return nxt
+            if s["question"] != q:          # câu đã được viết lại: chạy lại chốt chặn và đường nhanh trên câu mới
+                q = s["question"]
+                nxt = self._code_guards(s, q) or self._fast_path(s, q)
+                if nxt:
+                    return nxt
+        # 4) tái sử dụng SQL đã được xác nhận (học từ phản hồi) cho câu hỏi độc lập
+        if not clarified:
+            ret = get_retriever()
+            fs = ret.reusable(q, threshold=float(s["settings"].get("fewshot_reuse_threshold", 0.8)))
+            if fs and fs.get("sql"):
+                s["sql"], s["sql_source"], s["intent"] = fs["sql"], "fewshot", "metric_query"
+                s["fewshot_hit"] = {"id": fs["id"], "question": fs["question"], "similarity": fs["similarity"], "source": fs["source"]}
+                self.store.touch_fewshot(fs["id"])
+                s["notes"].append(f"Tái sử dụng SQL đã được xác nhận cho câu hỏi tương tự: “{fs['question']}” "
+                                  f"(độ tương đồng {fs['similarity']:.2f}).")
+                s["_detail"] = f"Few-shot hit #{fs['id']} ({fs['source']})"
                 return "optimizer"
-        # 2) LLM function calling (Claude hoặc OpenRouter)
-        if s["mode"] in llm.LLM_MODES:
-            # chốt chặn bằng code: thuật ngữ mơ hồ do doanh nghiệp khai báo thì luôn hỏi lại, không phụ thuộc mô hình
-            if not s.get("clarified"):
-                amb = get_nlu().detect_ambiguity(q, s["memory"])
-                if amb:
-                    s["clarification"] = dict(amb, question_text=amb["question"])
-                    s["_detail"] = f"Thuật ngữ mơ hồ theo semantic layer ({amb['id']}): hỏi lại trước khi gọi LLM"
+            # câu đã rõ thời gian/bộ lọc/cách chia, bộ luật hiểu hết mọi từ, chỉ thiếu chỉ số ("so sánh miền Bắc với miền
+            # Nam quý 3"): hỏi lại chỉ số bằng code thay vì để mô hình đoán
+            r = get_nlu().parse(q, {"prefs": s["memory"].get("prefs") or {}})
+            follow = (s.get("route") or {}).get("is_follow_up") or get_nlu().parse(q, s["memory"]).follow_up
+            if r.intent == "unknown" and not r.plan.get("metrics") and not get_nlu().unknown_terms(r)[0] and not follow \
+                    and (r.plan.get("time_range") or r.plan.get("filters") or r.plan.get("dimensions")):
+                c = self._metric_question(q, r)
+                if c:
+                    s["clarification"] = c
+                    s["_detail"] = "Câu hỏi có thời gian/bộ lọc/cách chia nhưng không nêu chỉ số: hỏi lại chỉ số"
                     return "clarify"
-            name = llm.MODE_LABEL[s["mode"]]
-            try:
-                return self._plan_with_claude(s)
-            except (llm.LLMUnavailable, llm.LLMError) as e:
-                s["notes"].append(f"Không dùng được {name} ({e}). Chuyển sang bộ hiểu ngôn ngữ offline.")
-                s["mode"], s["llm_fallback"] = "offline", f"{name}: {e}"
-            except Exception as e:  # pragma: no cover
-                s["notes"].append(f"Lỗi khi gọi {name} ({type(e).__name__}). Chuyển sang chế độ offline.")
-                s["mode"], s["llm_fallback"] = "offline", f"{name}: {type(e).__name__}"
-        # 3) NLU offline
-        r = get_nlu().parse(q, s["memory"])
-        s["intent"], s["plan"], s["chart_hint"] = r.intent, r.plan, r.chart_hint
-        s["assumptions"] += r.assumptions
-        s["follow_up"] = r.follow_up
-        s["metric_topic"] = r.metric_topic
-        s["_detail"] = (f"NLU offline: ý định={r.intent}, chỉ số={r.plan.get('metrics')}, chiều={r.plan.get('dimensions')}, "
-                        f"lọc={[(f['dimension'], f['values']) for f in r.plan.get('filters', [])]}, "
-                        f"thời gian={(r.plan.get('time_range') or {}).get('label')}" + (" [câu hỏi nối tiếp]" if r.follow_up else ""))
+            # thuật ngữ mơ hồ do doanh nghiệp khai báo thì luôn hỏi lại bằng code, không phụ thuộc mô hình
+            amb = get_nlu().detect_ambiguity(q, s["memory"])
+            if amb:
+                s["clarification"] = dict(amb, question_text=amb["question"])
+                s["_detail"] = f"Thuật ngữ mơ hồ theo semantic layer ({amb['id']}): hỏi lại trước khi gọi Planner"
+                return "clarify"
+        # 5) Planner: LLM function calling
+        try:
+            return self._plan_with_claude(s)
+        except (llm.LLMUnavailable, llm.LLMError) as e:
+            return self._llm_failed(s, e)
+        except Exception as e:  # pragma: no cover
+            return self._llm_failed(s, f"{type(e).__name__}: {e}")
+
+    # ------------------------------------------------------------------ đường nhanh: bộ luật hiểu trọn vẹn câu hỏi
+    def _fast_path(self, s, q):
+        """Trả lời không cần LLM khi bộ luật dùng hết mọi từ có nghĩa trong câu, chỉ số được nêu ngay trong câu (không kế
+        thừa từ câu trước) và không có mã đối tượng nào bộ luật không lọc được. Câu hiểu một phần luôn đi qua LLM.
+        Tắt được bằng cài đặt fast_path=False (đo riêng chất lượng của các tác tử LLM)."""
+        if not s["settings"].get("fast_path", True):
+            return None
+        nlu = get_nlu()
+        r = nlu.parse(q, {"prefs": (s["memory"].get("prefs") or {})})
+        if r.intent not in ("metric_query", "variance") or not r.plan.get("metrics") or r.follow_up:
+            return None
+        # câu nối tiếp ("còn doanh thu gộp thì sao") đọc riêng thì có vẻ trọn vẹn nhưng thiếu kỳ/bộ lọc của câu trước
+        if s["memory"].get("last_plan") and nlu.parse(q, s["memory"]).follow_up:
+            return None
+        # câu nối nhiều mệnh đề ("top 5 cửa hàng ..., và vì sao ... giảm"): bộ luật chỉ dựng được MỘT kế hoạch, sẽ bỏ mất một
+        # ý -> để Router tách ý. "doanh thu thuần và số đơn" (hai chỉ số trong một mệnh đề) vẫn đi đường nhanh.
+        if MULTI_CLAUSE_RE.search(_fold(q)):
+            return None
+        left = [w for w in r.matched.get("unparsed") or []
+                if not (r.intent == "variance" and norm(w) in WHY_WORDS)]     # "Vì sao ... giảm": từ hỏi nguyên nhân
+        if left or r.matched.get("invalid_time"):
+            return None
+        lk = lookup.get_lookups()
+        hits, unknown = lk.find_codes(q)
+        if unknown or any(not e.dimension for e, _, _ in hits):
+            return None
+        # "Top 10 khách hàng ..." mà khách hàng không phải chiều phân tích: bộ luật chỉ ra được con số tổng -> để LLM viết SQL
+        tn = norm(q)
+        for e in lk.entities.values():
+            words = "|".join(map(re.escape, e.words))
+            if not e.dimension and words and re.search(rf"\b(top \d+|\d+|theo|tung|moi|cac|nhung)\s+({words})\b|\b({words})\s+nao\b", tn):
+                return None
         if r.clarification:
             s["clarification"] = dict(r.clarification, question_text=r.clarification["question"])
+            s["_detail"] = "Đường nhanh: thuật ngữ mơ hồ theo semantic layer, hỏi lại"
             return "clarify"
-        if r.intent == "variance":
-            return "variance_analyst"
-        if r.intent in INFO_INTENTS:
+        s["intent"], s["plan"], s["chart_hint"] = r.intent, r.plan, r.chart_hint
+        s["assumptions"] += r.assumptions
+        s["path"] = "fast"
+        p = r.plan
+        s["_detail"] = (f"Đường nhanh (bộ luật hiểu trọn câu hỏi, không gọi LLM): ý định={r.intent}, chỉ số={p.get('metrics')}, "
+                        f"chiều={p.get('dimensions')}, lọc={[(f['dimension'], f['values']) for f in p.get('filters', [])]}, "
+                        f"thời gian={(p.get('time_range') or {}).get('label')}")
+        return "variance_analyst" if r.intent == "variance" else "sql_generator"
+
+    @staticmethod
+    def _metric_question(q, r) -> dict | None:
+        """Câu hỏi đã có thời gian, bộ lọc hoặc cách chia mà thiếu chỉ số ("so sánh miền Bắc với miền Nam quý 3"):
+        hỏi lại nên xem chỉ số nào, mỗi lựa chọn viết lại câu hỏi kèm tên chỉ số."""
+        sem, nlu = get_semantic(), get_nlu()
+        ranking = bool(r.matched.get("direction"))
+        names = [o["metric"] for a in nlu.rank_amb for o in a["options"] if o.get("metric") in sem.metrics]
+        dims = set(r.plan.get("dimensions") or []) | {f["dimension"] for f in r.plan.get("filters") or []}
+        # chỉ đưa chỉ số phân tích được theo đúng các chiều câu hỏi nhắc tới
+        names = [m for m in dict.fromkeys(names + list(sem.metrics)) if dims <= set(sem.dims_for_metric(m))][:4]
+        if not names:
+            return None
+        return {"id": "metric_" + uuid.uuid4().hex[:6], "pref_key": None, "question": q,
+                "question_text": "Bạn muốn xếp hạng theo tiêu chí nào?" if ranking else "Bạn muốn xem chỉ số nào?",
+                "options": [{"label": sem.metrics[m]["label"], "metric": m, "rewrite": f"{sem.metrics[m]['label']} {q}"}
+                            for m in names]}
+
+    # ------------------------------------------------------------------ Router: phân loại + viết lại câu hỏi
+    def _route(self, s):
+        q, mem = s["question"], s["memory"]
+        ctx = {"anchor": s["anchor"].isoformat(), "history": mem.get("history") or [],
+               "last_question": mem.get("last_question"), "prefs": mem.get("prefs"), "last_plan": mem.get("last_plan")}
+        t0 = time.time()
+        try:
+            client = llm.get_client(s["settings"], s["mode"], role="router")
+            out = client.route(q, ctx)
+        except (llm.LLMUnavailable, llm.LLMError) as e:
+            return self._llm_failed(s, e)
+        except Exception as e:  # pragma: no cover
+            return self._llm_failed(s, f"{type(e).__name__}: {e}")
+        ms = int((time.time() - t0) * 1000)
+        self._add_usage(s, client)
+        s["llm_trace"].append({"tool": "router", "input": {"question": q}, "ms": ms, "error": False,
+                               "output": {k: out[k] for k in ("intent", "is_follow_up", "standalone_question", "tasks")}})
+        s["route"] = out
+        intent = out["intent"]
+        s["_detail"] = (f"Router ({client.model}, {ms} ms): ý định={intent}" + (", câu nối tiếp" if out["is_follow_up"] else "")
+                        + (f", viết lại: “{out['standalone_question']}”" if out["standalone_question"] != q else "")
+                        + (f", {len(out['tasks'])} việc" if len(out["tasks"]) > 1 else ""))
+        sug = profile.sample_questions()[:4]
+        if intent == "unsafe":
+            s.update(intent="refused", refused=True, info_text=profile.refusal_text(), suggestions=sug)
             return "responder"
-        return "sql_generator"
+        if intent == "write_request":
+            s.update(intent="refused", refused=True, info_text=profile.write_refusal_text(), suggestions=sug)
+            return "responder"
+        if intent == "about_assistant":
+            s["intent"] = "help"
+            return "responder"
+        if intent == "smalltalk":
+            reply = out["reply"] if out["reply"] and not re.search(r"\d", out["reply"]) else ""
+            s.update(intent="smalltalk", info_text=reply or "Mình luôn sẵn sàng! Bạn muốn xem số liệu nào?")
+            return "responder"
+        if intent == "out_of_scope":
+            topic = profile.off_topic(q) or ({"label": out["topic"].strip()} if out["topic"].strip() else None)
+            s.update(intent="off_topic", off_topic=(topic or {}).get("label"), info_text=profile.off_topic_text(topic),
+                     suggestions=sug)
+            return "responder"
+        if intent == "forecast":
+            s.update(intent="out_of_scope", info_text=profile.forecast_text(s["anchor"].isoformat()), suggestions=sug)
+            return "responder"
+        if intent in ("metric_definition", "schema_info", "data_quality"):
+            if intent == "metric_definition":
+                r = get_nlu().parse(out["standalone_question"], {})
+                topic = r.metric_topic or next(iter(r.plan.get("metrics") or []), None)
+                if not topic:
+                    return None         # không nhận ra chỉ số: để Planner tra semantic layer và trả lời
+                s["metric_topic"] = topic
+            s["intent"] = {"metric_definition": "metric_info", "schema_info": "schema_info", "data_quality": "dq"}[intent]
+            return "responder"
+        # câu GỐC có thuật ngữ mơ hồ mà người dùng chưa chọn định nghĩa: hỏi lại bằng code, không để câu viết lại của
+        # Router (mô hình có thể tự chọn "cước ghi nhận" thay người dùng) lách qua bước hỏi lại
+        amb = get_nlu().detect_ambiguity(q, mem)
+        tasks = out["tasks"]
+        first = tasks[0]
+        multi = len(tasks) > 1 and s["settings"].get("multi_task", True)
+        # câu nhiều ý: ý nào còn thuật ngữ mơ hồ thì ý đó tự hỏi lại; chỉ khi Router đã "chọn hộ" định nghĩa (câu gốc mơ hồ
+        # mà không ý nào còn mơ hồ) mới hỏi lại cả câu
+        if amb and not (multi and any(get_nlu().detect_ambiguity(x, mem) for x in tasks)):
+            s["clarification"] = dict(amb, question_text=amb["question"])
+            s["_detail"] += f"; câu gốc có thuật ngữ mơ hồ ({amb['id']}): hỏi lại"
+            return "clarify"
+        # data / variance / lookup: tiếp tục với câu hỏi độc lập (mọi ý chạy song song nếu câu có nhiều ý)
+        if multi:
+            s["multi_tasks"] = tasks[:MAX_TASKS]
+            s["question_display"] = s.get("question_display") or q
+            if len(tasks) > MAX_TASKS:
+                s["pending_tasks"] = tasks[MAX_TASKS:]
+            s["_detail"] += f" → trả lời song song {min(len(tasks), MAX_TASKS)} ý"
+            return "multi"
+        if len(tasks) > 1:
+            s["pending_tasks"] = tasks[1:]
+            s["assumptions"].append(f"Câu hỏi có {len(tasks)} ý. Mình trả lời ý thứ nhất trước; các ý còn lại nằm trong phần "
+                                    "“Hỏi tiếp” bên dưới để bạn bấm xem tiếp.")
+        if norm(first) != norm(q):
+            s["question_display"] = s.get("question_display") or q
+            s["question"] = first
+            s["assumptions"].append(f"Mình hiểu câu hỏi là: “{first}”.")
+        s["breakdown_only"] = _breakdown_only(q)
+        s["route_why"] = intent == "variance" and not s["breakdown_only"]
+        return None
+
+    @staticmethod
+    def _add_usage(s, client):
+        u = s.setdefault("llm_usage", {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "calls": 0})
+        for k, v in (getattr(client, "usage", None) or {}).items():
+            u[k] = u.get(k, 0) + (v or 0)
+
+    def _no_llm(self, s):
+        s["intent"] = "llm_unavailable"
+        s["info_text"] = ("Mình chưa hiểu trọn câu này bằng bộ luật nhanh, và hệ thống chưa được cấu hình mô hình ngôn ngữ để "
+                          "hiểu câu hỏi tự do (quản trị viên cần đặt OPENROUTER_API_KEY). Bạn thử nêu rõ chỉ số và thời "
+                          "gian, ví dụ một trong các câu bên dưới.")
+        s["suggestions"] = profile.sample_questions()[:4]
+        s["_detail"] = "Không có mô hình ngôn ngữ: chỉ trả lời được câu bộ luật hiểu trọn vẹn"
+        return "responder"
+
+    def _llm_failed(self, s, e):
+        name = llm.MODE_LABEL.get(s["mode"], s["mode"])
+        s["status"] = "error"
+        s["llm_error"] = f"{name}: {e}"
+        s["error"] = (f"Mình tạm thời không gọi được mô hình ngôn ngữ ({name}) nên chưa trả lời được câu này. "
+                      f"Bạn thử lại sau ít phút. Chi tiết: {str(e)[:200]}")
+        s["_detail"] = f"Lỗi mô hình ngôn ngữ: {str(e)[:160]}"
+        return "finalize"
+
+    # ------------------------------------------------------------------ chốt chặn bằng code trước khi hiểu câu hỏi
+    def _code_guards(self, s, q):
+        """Những câu hệ thống phải trả lời giống nhau dù có LLM hay không: lệnh sửa/xóa dữ liệu, hỏi dữ liệu cá nhân/mật
+        mà vai trò không được xem, hỏi số liệu tương lai, mốc thời gian không tồn tại, mã đối tượng không có trong kho,
+        và câu tra cứu danh mục ("thông tin về SP0010")."""
+        info = lambda intent, text, detail, refused=False: (
+            s.update(intent=intent, info_text=text, suggestions=profile.sample_questions()[:4], _detail=detail,
+                     refused=refused) or "responder")
+        if profile.write_request(q):
+            return info("refused", profile.write_refusal_text(), "Từ chối: yêu cầu sửa/xóa dữ liệu (trợ lý chỉ đọc)", True)
+        hidden = restricted_request(q, s["user"])
+        if hidden:
+            return info("refused",
+                        f"Tài khoản của bạn không được xem **{', '.join(hidden)}** vì đây là dữ liệu cá nhân hoặc dữ liệu mật "
+                        "theo phân quyền của công ty. Mình vẫn giúp được với số liệu tổng hợp, hoặc tra cứu theo mã mà "
+                        "không kèm các thông tin này.",
+                        f"Từ chối: câu hỏi cần cột bị hạn chế với vai trò {s['user'].role} ({', '.join(hidden)})", True)
+        r = get_nlu().parse(q, s["memory"])
+        if profile.forecast_request(q):
+            m = next((x for x in r.plan.get("metrics") or [] if x in get_semantic().metrics), None)
+            sug = f"{get_semantic().metrics[m]['label']} theo tháng năm {s['anchor'].year}" if m else None
+            nxt = info("out_of_scope", profile.forecast_text(s["anchor"].isoformat(), sug),
+                       "Ngoài phạm vi: hỏi số liệu tương lai (dự báo)")
+            if sug:
+                s["suggestions"] = [sug] + s["suggestions"][:3]
+            return nxt
+        bad = r.matched.get("invalid_time")
+        if bad:
+            shown = re.sub(r"\bthang\b", "tháng", re.sub(r"\bquy\b", "quý", re.sub(r"\bnam\b", "năm", re.sub(r"\bngay\b", "ngày", bad[0]))))
+            return info("invalid_time", f"Mốc thời gian “{shown}” không tồn tại (tháng từ 1 đến 12, quý từ 1 đến 4, ngày phải có "
+                        "thật). Bạn kiểm tra lại giúp mình, ví dụ “tháng 10/2026” hoặc “quý 3 năm 2026”.",
+                        f"Mốc thời gian không hợp lệ: {bad}")
+        lk = lookup.get_lookups()
+        if r.plan.get("metrics"):
+            _, unknown = lk.find_codes(q)
+            unknown = [c for c in unknown if c.lower() not in get_nlu().vocab]
+            if unknown:
+                return info("not_found", f"Không tìm thấy mã **{', '.join(unknown)}** trong dữ liệu, nên mình chưa tính số liệu "
+                            "cho mã này. Bạn kiểm tra lại mã, hoặc hỏi theo tên (ví dụ tên cửa hàng, tên sản phẩm).",
+                            f"Mã không có trong danh mục: {unknown}")
+        spec = lk.detect(q, r)
+        if spec:
+            return self._start_lookup(s, spec)
+        return None
+
+    def _start_lookup(self, s, spec):
+        lk = lookup.get_lookups()
+        e = lk.entities[spec["entity"]]
+        s["intent"] = "lookup"
+        if spec["mode"] == "missing":
+            s["info_text"] = (f"Không tìm thấy {e.label} có mã **{', '.join(spec['codes'])}** trong dữ liệu. "
+                              "Bạn kiểm tra lại mã, hoặc tìm theo tên.")
+            s["_detail"] = f"Tra cứu {e.label}: mã không có trong danh mục"
+            return "responder"
+        built = lk.build(spec, s["user"].role_cfg)
+        s["lookup"], s["lookup_built"] = spec, built
+        s["sql"], s["sql_source"], s["columns_meta"] = built["sql"], "lookup", None
+        s["_detail"] = f"Tra cứu danh mục {e.label} ({spec['mode']}) trên {e.table}"
+        return "validator"
 
     def _plan_with_claude(self, s):
+        if not s.get("critic_rounds"):      # để Critic làm lại kế hoạch mà không giữ giả định của lần lập trước
+            s["_assumptions_before_plan"], s["_notes_before_plan"] = list(s["assumptions"]), list(s["notes"])
+        why = (is_why_question(s["question"]) or bool(s.get("route_why"))) and not s.get("breakdown_only")
+        spec = s.pop("_spec", None)
+        out = client = None
+        # Planner đã chạy đón trước song song với Router trên đúng câu này, cùng ngữ cảnh -> dùng luôn, đỡ ~1,5 s chờ
+        if spec and self._same_question(s, spec[0]) and not s.get("clarified") and not s.get("critic_feedback") \
+                and why == is_why_question(spec[0]):
+            try:
+                out, client, trace = spec[1].result(timeout=60)
+                s["llm_trace"] += trace
+                s["speculative"] = True
+            except Exception:
+                out = None          # chạy đón trước lỗi: gọi lại bình thường (lỗi thật sẽ lộ ra ở lần gọi này)
+        if out is None:
+            out, client, trace = self._call_planner(s)
+            s["llm_trace"] += trace
+        return self._use_plan(s, out, client, why)
+
+    @staticmethod
+    def _same_question(s, original: str) -> bool:
+        """Câu Router viết lại vẫn cùng nội dung với câu gốc (chỉ thêm “là bao nhiêu?”, sửa dấu câu...): không phải câu nối
+        tiếp và bộ luật đọc ra cùng chỉ số, bộ lọc, kỳ, cách chia, top N. Sửa chính tả làm đổi bộ lọc thì khác."""
+        q = s["question"]
+        if norm(q) == norm(original):
+            return True
+        if (s.get("route") or {}).get("is_follow_up"):
+            return False
+        nlu, prefs = get_nlu(), {"prefs": s["memory"].get("prefs") or {}}
+        keys = ("metrics", "dimensions", "filters", "time_range", "compare", "limit", "order_by", "having", "per")
+        a, b = nlu.parse(original, prefs), nlu.parse(q, prefs)
+        return a.intent == b.intent and all(a.plan.get(k) == b.plan.get(k) for k in keys) and bool(a.plan.get("metrics"))
+
+    def _call_planner(self, s):
+        """Dựng ngữ cảnh và gọi Planner. Chỉ ĐỌC trạng thái, nên chạy được ở luồng nền (chạy đón trước song song Router)."""
         user = s["user"]
+        trace = []
         ret = get_retriever()
         shots = ret.search_fewshots(s["question"], k=int(s["settings"].get("fewshot_k", 4)))
         fs_txt = "\n".join(f"- Q: {f['question']}\n  SQL: {re.sub(r'\s+', ' ', f['sql'])}" for f in shots) or "(chưa có)"
         mem = {k: s["memory"].get(k) for k in ("prefs", "last_plan", "last_question", "last_sql") if s["memory"].get(k)}
         hints = []
-        why = is_why_question(s["question"])
+        why = (is_why_question(s["question"]) or bool(s.get("route_why"))) and not s.get("breakdown_only")
         if s.get("clarified"):
             c = s["clarified"]
             hints.append(f"Người dùng vừa làm rõ câu hỏi bằng lựa chọn: “{c['label']}”"
                          + (f" (chỉ số {c['metric']})" if c.get("metric") else "") + ". Dùng đúng lựa chọn này, không hỏi lại.")
+        fb = s.get("critic_feedback")
+        if fb:
+            hints.append(f"Lần trước bạn nộp {fb['plan']}. Tác tử kiểm tra đánh giá là CHƯA trả lời đúng câu hỏi: "
+                         f"{fb['problem']} Hướng sửa: {fb['fix'] or 'lập lại kế hoạch cho đúng ý câu hỏi'}. Hãy nộp kế hoạch "
+                         "đã sửa (nếu bạn chắc chắn kế hoạch trước đã đúng thì nộp lại y như cũ).")
         if why:
             hints.append("Đây là câu hỏi tìm nguyên nhân biến động: nộp intent=variance, kind=semantic với semantic_plan gồm "
                          "metrics (một chỉ số), filters, time_range (kỳ đang hỏi) và compare (kỳ so sánh; nếu người dùng "
@@ -266,18 +600,27 @@ class Agent:
                 hints.append(
                     f"Bộ phân tích bằng luật đã dùng hết các từ có nghĩa trong câu hỏi và đề xuất plan: {plan_txt}. "
                     "Biên dịch rồi nộp đúng plan đó (kind=semantic), trừ khi bạn thấy nó sai ý câu hỏi.")
+        # schema linking: mô tả cột của vài bảng liên quan nhất, tra sẵn bằng code -> mô hình viết SQL không cần tra bảng
+        cat = get_catalog()
+        linked = [t for t in ret.search_schema(s["question"], k=3)["tables"]
+                  if cat.get(t) and cat.get(t)["schema"] in user.role_cfg["schemas"]][:3]
         ctx = {"anchor": s["anchor"].isoformat(), "role": user.role, "rls": user.rls, "memory": mem, "fewshots": fs_txt,
-               "hints": hints}
+               "hints": hints, "schema": cat.schema_text(linked, user.role_cfg) if linked else ""}
         client = llm.get_client(s["settings"], s["mode"])
-        out = client.plan(s["question"], ctx, self._tool_impls(user, draft), trace=s["llm_trace"])
-        s["llm_usage"] = client.usage
+        tools = self._tool_impls(user, draft)
+        out = client.plan(s["question"], ctx, tools, trace=trace, check=self._submit_check(tools, trace))
+        return out, client, trace
+
+    def _use_plan(self, s, out, client, why):
+        self._add_usage(s, client)
         s["claude"] = client
         s["assumptions"] += out.get("assumptions") or []
         s["chart_hint"] = out.get("chart_hint") if out.get("chart_hint") not in (None, "auto", "table") else None
         s["intent"] = out.get("intent") or "metric_query"
         kind = out.get("kind")
         s["_detail"] = f"{llm.MODE_LABEL[s['mode']]} ({client.model}, effort={client.effort}): kind={kind}, intent={s['intent']}, " \
-                       f"{len(s['llm_trace'])} lần gọi tool, {client.usage['calls']} lượt gọi API"
+                       f"{len(s['llm_trace'])} lần gọi tool, {client.usage['calls']} lượt gọi API" \
+                       + (" (chạy đón trước song song với Router)" if s.get("speculative") else "")
         # Phân tích nguyên nhân chỉ dành cho câu hỏi "vì sao" (nhận diện bằng code), không theo nhãn intent của mô hình:
         # - câu "vì sao" mà mô hình không lập được plan phân tích (viết truy vấn so sánh, hoặc hỏi lại dù các thuật ngữ mơ hồ
         #   đã được code kiểm ở bước trước) -> dùng plan của bộ luật nếu bộ luật hiểu trọn câu hỏi;
@@ -313,13 +656,89 @@ class Agent:
             return "variance_analyst"
         if kind == "sql" and out.get("sql"):
             s["sql"], s["sql_source"] = out["sql"], "llm"
+            if s["settings"].get("critic", True):
+                s["critic_issues"] = critic.check_sql(s["question"], out["sql"], s["memory"].get("prefs"))
             return "optimizer"
         if out.get("semantic_plan"):
             s["plan"] = out["semantic_plan"]
-            return "sql_generator"
+            return self._coverage_check(s, s["plan"]) or "sql_generator"
         s["info_text"] = out.get("answer_text") or "Mình chưa hiểu câu hỏi, bạn có thể diễn đạt lại?"
         s["intent"] = "unknown"
         return "responder"
+
+    @staticmethod
+    def _submit_check(tools: dict, trace: list):
+        """Kiểm tra bài Planner nộp ngay lúc nộp (biên dịch semantic plan / chạy thử SQL). Có lỗi thì trả nội dung lỗi để
+        mô hình sửa trong cùng hội thoại, thay vì mất một lượt gọi riêng để "biên dịch thử" trước khi nộp."""
+        def check(ans: dict) -> str | None:
+            kind, t0 = ans.get("kind"), time.time()
+            try:
+                if kind == "semantic" and ans.get("intent") != "variance" and ans.get("semantic_plan"):
+                    r = tools["compile_semantic_plan"](plan=ans["semantic_plan"])
+                    bad = r["errors"] or r.get("warnings")
+                elif kind == "sql" and ans.get("sql"):
+                    r = tools["dry_run_sql"](ans["sql"])
+                    bad = r["errors"] or [x for x in r.get("lint") or [] if x["severity"] == "error"]
+                else:
+                    return None
+            except Exception as e:      # lỗi biên dịch (vd tên chỉ số/chiều sai): mô hình sửa được
+                r, bad = {"error": str(e)}, True
+            trace.append({"tool": f"submit_check:{kind}", "input": {}, "ms": int((time.time() - t0) * 1000), "error": bool(bad)})
+            if not bad:
+                return None
+            return ("Bài nộp CHƯA được nhận vì kiểm tra tự động báo lỗi. Sửa rồi gọi lại submit_answer:\n"
+                    + json.dumps({k: r.get(k) for k in ("error", "errors", "warnings", "lint") if r.get(k)},
+                                 ensure_ascii=False, default=str)[:4000])
+        return check
+
+    def _coverage_check(self, s, plan):
+        """Kiểm tra bằng code sau Planner: semantic plan không được âm thầm bỏ qua một phần câu hỏi rồi trả số liệu chung.
+        - mã đối tượng không phải chiều phân tích (vd mã khách hàng ở kho không có chiều khách hàng): plan không lọc được;
+        - từ lạ gần giống một giá trị trong kho ("Aple" ~ "Apple") mà plan không lọc theo: hỏi lại;
+        - từ lạ còn lại mà plan không phản ánh: nói rõ là kết quả CHƯA lọc theo phần đó."""
+        q, nlu, lk = s["question"], get_nlu(), lookup.get_lookups()
+        vals = norm(" ".join(str(v) for f in plan.get("filters") or [] for v in f.get("values") or []))
+        hits, _ = lk.find_codes(q)
+        nofilter = [(e, k) for e, k, _ in hits if not e.dimension and norm(k) not in vals]
+        if nofilter:
+            e, k = nofilter[0]
+            s["intent"], s["info_text"] = "unsupported", (
+                f"Mình chưa tính được số liệu riêng cho từng {e.label} (mã {k}) theo danh mục chỉ số, nên không trả con số "
+                f"chung để tránh hiểu nhầm. Bạn có thể xem thông tin {e.label} này (hỏi “thông tin {k}”).")
+            s["_detail"] = f"Kiểm tra độ bao phủ: plan không lọc được theo {e.label} {k}"
+            return "responder"
+        if (s.get("clarified") or {}).get("typo"):
+            return None
+        r = nlu.parse(q, {"prefs": s["memory"].get("prefs") or {}})
+        unknown, sugg = nlu.unknown_terms(r)
+        unknown = [w for w in unknown if norm(w) not in vals]
+        if sugg and norm(str(sugg["value"])) not in vals:
+            dim_label = get_semantic().dims[sugg["dimension"]]["label"] if sugg["dimension"] in get_semantic().dims else ""
+            words = r"\s+".join(map(re.escape, sugg["text"].split()))
+            fixed = re.sub(words, str(sugg["value"]), q, count=1)
+            dropped = re.sub(r"\s{2,}", " ", re.sub(words, " ", q, count=1)).strip()
+            s["clarification"] = {
+                "id": "typo_" + uuid.uuid4().hex[:6], "pref_key": None,
+                "question": q, "question_text": f"Mình không thấy “{sugg['text']}” trong dữ liệu. Có phải ý bạn là "
+                                                f"**{sugg['value']}**" + (f" ({dim_label.lower()})" if dim_label else "") + "?",
+                "options": [{"label": f"Đúng, {sugg['value']}", "rewrite": fixed, "typo": True},
+                            {"label": f"Không, bỏ qua “{sugg['text']}” và tính chung", "rewrite": dropped, "typo": True}]}
+            s["_detail"] = f"Kiểm tra độ bao phủ: từ lạ “{sugg['text']}” gần giống “{sugg['value']}”, plan không lọc theo -> hỏi lại"
+            return "clarify"
+        if unknown:
+            s["assumptions"].append(f"Mình chưa hiểu “{' '.join(unknown)}” nên kết quả CHƯA lọc theo phần này — đây là số liệu "
+                                    "chung. Nếu đó là tên sản phẩm/cửa hàng, hãy kiểm tra lại chính tả hoặc hỏi “danh sách sản phẩm”.")
+        # Critic lớp 1 (code): kế hoạch không được bỏ sót phần người dùng nêu rõ; vá thẳng và báo cho người dùng
+        if s["settings"].get("critic", True):
+            c = critic.check_plan(q, plan, s["memory"].get("prefs"))
+            if c["fixes"]:
+                s["plan"] = c["plan"]
+                s["assumptions"].append("Tác tử kiểm tra đã sửa kế hoạch cho khớp câu hỏi: " + "; ".join(c["fixes"]) + ".")
+            s["critic_issues"] = c["issues"]
+            log = s.setdefault("critic", {"fixes": [], "issues": [], "verdict": None})
+            log["fixes"] += c["fixes"]
+            log["issues"] += c["issues"]
+        return None
 
     def _tool_impls(self, user: UserCtx, draft: dict | None = None) -> dict:
         """Các tool cho LLM. draft = bản nháp plan của bộ luật (nếu có), dùng để cảnh báo khi plan bỏ sót bộ lọc."""
@@ -411,6 +830,35 @@ class Agent:
         return {"search_schema": search_schema, "describe_table": describe_table, "get_column_values": get_column_values,
                 "dry_run_sql": dry_run_sql, "compile_semantic_plan": compile_semantic_plan}
 
+    def n_multi(self, s):
+        """Câu nhiều ý: mỗi ý chạy song song như một câu hỏi độc lập (đường nhanh hoặc Planner, đủ các chốt kiểm tra,
+        Critic), rồi gộp thành một câu trả lời nhiều phần. Thời gian chờ bằng ý chậm nhất, không phải tổng các ý."""
+        tasks = s["multi_tasks"]
+
+        def run(task):
+            sub = self.new_state(s["user"], s["conversation_id"], task, eval_mode=s["eval_mode"], mode=s.get("force_mode"))
+            sub["subtask"], sub["t0"] = True, s["t0"]      # chung ngân sách thời gian với câu cha
+            self.graph.run(sub, "load_context")
+            return sub
+        subs = list(MULTI_POOL.map(run, tasks))
+        parts = [x["response"] for x in subs]
+        for sub in subs:
+            for k, v in (sub.get("llm_usage") or {}).items():
+                u = s.setdefault("llm_usage", {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "calls": 0})
+                u[k] = u.get(k, 0) + v
+        s["parts"] = parts
+        ok = [x for x in subs if x["status"] == "success"]
+        main = ok[0] if ok else subs[0]
+        # bộ nhớ hội thoại theo ý trả lời được đầu tiên (câu hỏi tiếp “còn tháng trước thì sao” bám theo ý đó)
+        for k in ("plan", "sql", "intent", "mode"):
+            s[k] = main.get(k)
+        s["status"] = "success" if ok else main["status"]
+        n_ok = len(ok)
+        s["text"] = (f"Bạn hỏi {len(tasks)} ý — mình trả lời từng ý bên dưới"
+                     + ("." if n_ok == len(tasks) else f" ({n_ok}/{len(tasks)} ý có số liệu, các ý còn lại cần bạn xem lại)."))
+        s["_detail"] = f"{len(tasks)} ý chạy song song: " + ", ".join(f"{p['type']} ({p['elapsed_ms']} ms)" for p in parts)
+        return "finalize"
+
     def n_clarify(self, s):
         c = s["clarification"]
         s["memory"]["pending_clarification"] = {"id": c["id"], "question": s["question"], "pref_key": c.get("pref_key"),
@@ -454,14 +902,24 @@ class Agent:
             s["text"] = ("Mình chưa hiểu câu này muốn xem số liệu nào. Mình trả lời được các câu hỏi về: " +
                          ", ".join(labels[:12]) + ("…" if len(labels) > 12 else "") +
                          ". Bạn thử nêu rõ chỉ số và thời gian, hoặc bắt đầu từ một câu mẫu bên dưới.")
-            if s["mode"] == "offline":
-                s["text"] += ("\n\nHiện trợ lý đang trả lời bằng bộ luật có sẵn nên chỉ hiểu các câu về chỉ số đã định nghĩa. "
-                              "Quản trị viên có thể bật mô hình ngôn ngữ trong trang Cài đặt để hỏi tự do hơn.")
             s["suggestions"] = SAMPLE_QUESTIONS[:5]
         s["_detail"] = f"Trả lời thông tin ({intent})"
         return "finalize"
 
     def n_sql_generator(self, s):
+        plan = s.get("plan") or {}
+        tr = plan.get("time_range") or {}
+        win = get_semantic().data_window(plan.get("metrics") or [])
+        if win and tr.get("start") and tr.get("end") and (str(tr["end"]) <= win[0] or str(tr["start"]) > win[1]):
+            d = lambda x: f"{x[8:10]}/{x[5:7]}/{x[:4]}"
+            future = str(tr["start"]) > s["anchor"].isoformat()
+            s["status"], s["intent"] = "info", "out_of_range"
+            s["text"] = (f"Kho chỉ có số liệu này từ ngày {d(win[0])} đến ngày {d(win[1])}, nên không có số liệu cho "
+                         f"{tr.get('label') or 'khoảng thời gian bạn hỏi'}."
+                         + (" Mình không dự báo số liệu tương lai." if future else ""))
+            s["suggestions"] = profile.sample_questions()[:4]
+            s["_detail"] = f"Kỳ hỏi {tr.get('start')}..{tr.get('end')} nằm ngoài dữ liệu {win[0]}..{win[1]}"
+            return "finalize"
         try:
             c = get_semantic().compile(s["plan"])
         except SemanticError as e:
@@ -554,7 +1012,8 @@ class Agent:
         if dec["decision"] == "approval" and not s["approved"] and not s["eval_mode"]:
             s["status"] = "pending_approval"
             keep = {k: s.get(k) for k in ("question", "plan", "sql", "sql_source", "columns_meta", "intent", "assumptions",
-                                          "notes", "chart_hint", "repairs", "attempts", "mode", "trace", "console")}
+                                          "notes", "chart_hint", "repairs", "attempts", "mode", "trace", "console",
+                                          "lookup", "lookup_built")}
             self.store.save_pending(s["run_id"], s["conversation_id"], s["user"].username, copy.deepcopy(keep))
             return "finalize"
         return "executor"
@@ -579,6 +1038,16 @@ class Agent:
 
     def n_analyst(self, s):
         r = s["result"]
+        if s.get("lookup"):
+            out = lookup.get_lookups().render(s["lookup"], s["lookup_built"], r["columns"], r["rows"], s["user"])
+            s["result"] = dict(r, columns=out["columns"], rows=out["rows"], row_count=len(out["rows"]))
+            s["columns_meta"] = out["meta"]
+            s["facts"], s["template"], s["text"], s["highlights"] = out["facts"], out["template"], out["text"], []
+            s["chart"] = None
+            s["notes"] += out["notes"]
+            s["lookup_follow_ups"] = out["follow_ups"]
+            s["_detail"] = f"Tra cứu danh mục: {len(out['rows'])} dòng hiển thị"
+            return "explainer"
         meta = s.get("columns_meta")
         if not meta or [m["name"] for m in meta] != r["columns"]:
             meta = infer_meta(r["columns"], r["types"], r["rows"])
@@ -587,15 +1056,88 @@ class Agent:
         s["facts"], s["template"], s["text"], s["highlights"] = e["facts"], e["template"], e["text"], e["highlights"]
         s["chart"] = explain.recommend_chart(meta, r["columns"], r["rows"], s.get("chart_hint"), e["highlights"])
         s["_detail"] = f"{len(e['facts'])} dữ kiện; biểu đồ: {(s['chart'] or {}).get('type', 'không')}"
+        if _no_numbers(meta, r):
+            self._explain_empty(s)
         return "explainer"
+
+    def _explain_empty(self, s):
+        """Kết quả rỗng ("—"): nói rõ là không có số liệu và vì sao có thể như vậy, thay vì hiện một ô trống."""
+        sem, plan = get_semantic(), s.get("plan") or {}
+        facts = {}
+
+        def ctx(fid, text):
+            facts[fid] = {"id": fid, "value": text, "text": text, "recipe": {"op": "context"}, "kind": "context"}
+            return text
+        mets = [sem.metrics[m]["label"].lower() for m in plan.get("metrics") or [] if m in sem.metrics]
+        conds = [ctx(f"c{i}", f"{sem.dims[f['dimension']]['label'].lower() if f['dimension'] in sem.dims else f['dimension']} "
+                              f"{'khác ' if f.get('op') == 'not_in' else ''}{', '.join(map(str, f.get('values') or []))}")
+                 for i, f in enumerate(plan.get("filters") or [])]
+        tr = (plan.get("time_range") or {}).get("label")
+        hv = [h for h in plan.get("having") or [] if h.get("metric") in sem.metrics]
+        gdims = [d for d in plan.get("dimensions") or [] if d in sem.dims and sem.dims[d].get("kind") != "time"]
+        if hv and gdims:    # có điều kiện lọc trên chỉ số: không đối tượng nào thỏa, khác với "không có số liệu"
+            ops = {"<": "dưới", "<=": "không quá", ">": "trên", ">=": "từ", "=": "bằng"}
+            cond = " và ".join(f"{sem.metrics[h['metric']]['label'].lower()} {ops.get(h.get('op'), h.get('op'))} "
+                               f"{h['value']:g}{'%' if sem.metrics[h['metric']].get('format') == 'percent' else ''}" for h in hv)
+            text = (f"Không có {sem.dims[gdims[0]]['label'].lower()} nào có {cond}" + (f" (lọc {'; '.join(conds)})" if conds else "")
+                    + (f" trong {ctx('period', tr)}" if tr else "") + ".")
+            s["text"] = s["template"] = text
+            s["facts"], s["chart"], s["highlights"], s["empty_result"] = facts, None, [], True
+            return
+        text = "Không có số liệu" + (f" {', '.join(mets)}" if mets else "") +                (f" cho {'; '.join(conds)}" if conds else "") + (f" trong {ctx('period', tr)}" if tr else "") + "."
+        if (s.get("validation") or {}).get("rls_applied"):
+            text += (" Tài khoản của bạn chỉ được xem một phần dữ liệu (phân quyền theo dòng), nên điều kiện này có thể nằm "
+                     "ngoài phạm vi bạn được xem.")
+        elif conds:
+            text += " Có thể đối tượng này không phát sinh giao dịch trong kỳ (ví dụ đã đóng cửa, ngừng kinh doanh hoặc chưa mở)."
+        s["text"] = s["template"] = text
+        s["facts"], s["chart"], s["highlights"], s["empty_result"] = facts, None, [], True
+
+    def _start_judge(self, s):
+        """Critic lớp 2: LLM chấm kết quả có trả lời đúng câu hỏi không. Chỉ cho câu do Planner (LLM) lập kế hoạch: câu đi
+        đường nhanh do bộ luật hiểu trọn vẹn, không có gì để chấm. Chạy nền, song song với lượt viết lời."""
+        st = s["settings"]
+        if not (st.get("critic", True) and st.get("critic_llm", True)) or s["mode"] not in llm.LLM_MODES \
+                or not s.get("claude") or s.get("lookup") or s.get("critic_rounds"):
+            return
+        # chỉ chấm khi còn kịp làm lại: hết thời gian thì kết quả chấm không đổi được gì, chỉ làm người dùng chờ thêm
+        if st.get("critic_revise", True) and time.time() - s["t0"] > float(st.get("critic_revise_until_s", 6)):
+            s.setdefault("critic", {"fixes": [], "issues": [], "verdict": None})["verdict"] = "skipped"
+            return
+        try:        # chấm là lớp kiểm tra phụ: hỏng thì bỏ qua, không làm hỏng câu trả lời đã kiểm chứng số liệu
+            client = llm.get_client(st, s["mode"], role="router")
+            semantic = (s.get("sql_source") or "").startswith("semantic")
+            prompt = critic.judge_prompt(s["question"], s.get("question_display"), s.get("plan") if semantic else None,
+                                         s.get("sql"), s["result"], s.get("assumptions") or [], s.get("critic_issues") or [])
+            s["_judge"] = (client, CRITIC_POOL.submit(client.critique, prompt), time.time())
+        except Exception as e:
+            s.setdefault("critic", {"fixes": [], "issues": [], "verdict": None})["verdict"] = f"error: {type(e).__name__}"
 
     def n_explainer(self, s):
         r = s["result"]
-        if s["mode"] in llm.LLM_MODES and s["facts"] and not s["eval_mode"]:
+        self._start_judge(s)
+        # hỏi "theo miền" nhưng tài khoản chỉ xem được một miền: nói rõ vì sao bảng chia chỉ có một dòng
+        if (s.get("validation") or {}).get("rls_applied") and len(r.get("rows") or []) == 1 \
+                and (s.get("plan") or {}).get("dimensions"):
+            s["notes"].append("Tài khoản của bạn chỉ được xem một phần dữ liệu (phân quyền theo dòng), nên bảng chỉ có phần "
+                              "thuộc phạm vi đó.")
+        # ngân sách thời gian: câu đã tốn gần hết ngân sách (thường do Planner) thì dùng bản diễn giải tự động, cũng đã
+        # kiểm chứng số liệu, thay vì bắt người dùng chờ thêm một lượt gọi mô hình chỉ để câu văn mượt hơn
+        budget = float(s["settings"].get("latency_budget_s", 10)) - NARRATE_RESERVE_S
+        over = time.time() - s["t0"] > budget
+        if over and s["mode"] in llm.LLM_MODES and s["facts"] and not s["eval_mode"]:
+            s["notes"].append("Dùng bản diễn giải tự động để trả lời trong ngân sách thời gian.")
+        single = len(r.get("rows") or []) <= 1      # một dòng kết quả: bản tự động đã đủ rõ, không cần thêm lượt gọi
+        if s["mode"] in llm.LLM_MODES and s["facts"] and not s["eval_mode"] and not s.get("lookup") and not s.get("empty_result") \
+                and not over and not single:
             try:
-                client = s.get("claude") or llm.get_client(s["settings"], s["mode"])
+                client = llm.get_client(s["settings"], s["mode"], role="router")     # model nhanh
                 txt = client.narrate(s["question"], s["facts"], s["template"])
-                if txt:
+                self._add_usage(s, client)
+                if txt and not critic.answer_focus_ok(_render(txt, s["facts"]), s.get("plan")) \
+                        and critic.answer_focus_ok(s["text"], s.get("plan")):
+                    s["notes"].append("Lời diễn giải của LLM không mở đầu bằng chỉ số bạn hỏi — dùng bản diễn giải tự động.")
+                elif txt:
                     s["text"] = _render(txt, s["facts"])
                     s["narrator"] = s["mode"]
                 else:
@@ -610,6 +1152,58 @@ class Agent:
         s["status"] = "success"
         a = s["audit"]
         s["_detail"] = f"Kiểm chứng số liệu: {a['facts_matched']}/{a['facts_checked']} dữ kiện khớp, {len(a['unverified_numbers'])} số lạ"
+        return "critic"
+
+    def n_critic(self, s):
+        """Nhận kết quả LLM chấm. "wrong": nếu còn thời gian thì Planner lập lại kế hoạch MỘT lần kèm nhận xét, không thì
+        giữ câu trả lời và cảnh báo rõ cho người dùng. LLM chấm lỗi/quá lâu thì bỏ qua (số liệu vẫn đã được code kiểm)."""
+        log = s.setdefault("critic", {"fixes": [], "issues": [], "verdict": None})
+        job = s.pop("_judge", None)
+        if not job:
+            s["_detail"] = "Không cần LLM chấm (" + ("đường nhanh: bộ luật hiểu trọn câu" if s.get("path") == "fast" else
+                                                     "đã chấm ở lượt trước" if s.get("critic_rounds") else
+                                                     "tắt hoặc không áp dụng") + ")"
+            return "finalize"
+        client, fut, t0 = job
+        try:
+            v = fut.result(timeout=CRITIC_WAIT_S)
+        except Exception as e:
+            log["verdict"] = "error"
+            s["_detail"] = f"LLM chấm không phản hồi kịp ({type(e).__name__}): giữ câu trả lời đã kiểm chứng số liệu"
+            return "finalize"
+        self._add_usage(s, client)
+        ms = int((time.time() - t0) * 1000)
+        s["llm_trace"].append({"tool": "critic", "input": {"question": s["question"]}, "ms": ms, "error": False, "output": v})
+        log.update(verdict=v["verdict"], problem=v["problem"], judge_model=client.model)
+        if v["verdict"] == "ok":
+            s["_detail"] = f"LLM chấm ({client.model}, {ms} ms): câu trả lời trúng câu hỏi"
+            return "finalize"
+        st = s["settings"]
+        elapsed = time.time() - s["t0"]
+        if st.get("critic_revise", True) and elapsed < float(st.get("critic_revise_until_s", 6)) + CRITIC_WAIT_S:
+            keep = {k: (s[k] if k == "_v" else copy.deepcopy(s[k])) for k in PLAN_KEYS if k in s}
+            semantic = (s.get("sql_source") or "").startswith("semantic")
+            s["critic_rounds"] = 1
+            s["critic_feedback"] = {"plan": critic.describe_plan(s.get("plan") if semantic else None, s.get("sql")),
+                                    "problem": v["problem"], "fix": v["fix"]}
+            base_a, base_n = s.get("_assumptions_before_plan") or [], s.get("_notes_before_plan") or []
+            for k in PLAN_KEYS:
+                s.pop(k, None)
+            s.update(assumptions=list(base_a), notes=list(base_n), attempts=0, repairs=[], executed=[], status=None,
+                     plan=None, sql=None, sql_source=None, columns_meta=None, intent=None, chart_hint=None)
+            s["notes"].append(f"Tác tử kiểm tra thấy lần trả lời đầu chưa đúng ý ({v['problem']}) nên đã lập lại kế hoạch.")
+            log["revised"] = True
+            s["_detail"] = f"LLM chấm ({client.model}, {ms} ms): CHƯA đúng — {v['problem']} → Planner lập lại kế hoạch"
+            try:
+                return self._plan_with_claude(s)
+            except Exception as e:      # làm lại thất bại: trả câu trả lời cũ kèm cảnh báo
+                s.update(keep)
+                s["notes"].append(f"⚠ Tác tử kiểm tra nghi câu trả lời chưa đúng ý: {v['problem']} "
+                                  f"(chưa lập lại được: {str(e)[:80]}).")
+                return "finalize"
+        s["notes"].append(f"⚠ Tác tử kiểm tra nghi câu trả lời chưa đúng ý: {v['problem']} Bạn có thể hỏi lại cụ thể hơn.")
+        log["warned"] = True
+        s["_detail"] = f"LLM chấm ({client.model}, {ms} ms): CHƯA đúng — {v['problem']} (hết thời gian làm lại, cảnh báo)"
         return "finalize"
 
     def n_variance_analyst(self, s):
@@ -632,26 +1226,41 @@ class Agent:
             res = get_warehouse().execute(v.sql_exec, timeout_s=30, max_rows=20000)
             return {"columns": res["columns"], "rows": res["rows"], "sql": v.sql_exec, "bytes": est["total_bytes"], "ms": res["elapsed_ms"]}
 
+        # giả thuyết nguyên nhân: mô hình nhanh đề xuất, insights tự chạy truy vấn kiểm chứng; phải xong trong ngân sách
+        st, hyp_client, hypothesize, deadline = s["settings"], None, None, None
+        if st.get("variance_hypotheses", True) and s["mode"] in llm.LLM_MODES:
+            try:
+                hyp_client = llm.get_client(st, s["mode"], role="router")
+                hypothesize = hyp_client.hypothesize
+                deadline = s["t0"] + float(st.get("latency_budget_s", 10)) - 0.5
+            except Exception:
+                hyp_client = hypothesize = None
         try:
-            out = insights.analyze(plan, run, s["anchor"])
+            out = insights.analyze(plan, run, s["anchor"], hypothesize=hypothesize, deadline=deadline)
         except Exception as e:
             s["status"], s["error"] = "error", f"Không phân tích được biến động: {e}"
             return "finalize"
         s["variance"] = out
+        if hyp_client is not None:
+            self._add_usage(s, hyp_client)
         s["text"], s["facts"], s["audit"], s["chart"] = out["text"], out["facts"], out["audit"], out["chart"]
         s["sql"] = out["queries"][0]["sql"] if out["queries"] else None
         s["executed"] = [{"sql": q["sql"], "bytes": q["bytes"], "rows": q["rows"], "ms": q["ms"]} for q in out["queries"]]
         s["cost"] = {"total_bytes": budget["bytes"], "human": human_bytes(budget["bytes"]), "decision": "auto", "reasons": [],
                      "tables": [], "large_tables": []}
         s["status"] = "success"
+        hyps = [h for h in out.get("hypotheses") or [] if h.get("status") != "error"]
         s["_detail"] = f"{len(out['queries'])} truy vấn phân tích; chiều giải thích tốt nhất: {out['best_dimension']}; " \
-                       f"{len(out['root_causes'])} kiểm tra nguyên nhân"
+                       f"{len(out['root_causes'])} kiểm tra nguyên nhân; " \
+                       f"{sum(h.get('status') == 'confirmed' for h in hyps)}/{len(hyps)} giả thuyết được xác nhận"
         return "finalize"
 
     def n_finalize(self, s):
         user = s["user"]
         resp = self._response(s)
         s["response"] = resp
+        if s.get("subtask"):
+            return self._finalize_subtask(s, resp)
         mem = s["memory"]
         if s["status"] == "success" and s.get("plan") and s["intent"] in ("metric_query", "variance"):
             mem["last_plan"] = s["plan"]
@@ -672,14 +1281,42 @@ class Agent:
             self.store.add_message(s["conversation_id"], "user", {"text": s.get("question_display") or s["question"],
                                                                   "clarification": s.get("clarification_answer")})
         self.store.add_message(s["conversation_id"], "assistant", resp)
-        if s["status"] not in ("clarification", "info") or s.get("sql"):
+        if (s["status"] not in ("clarification", "info") or s.get("sql") or s.get("refused")) and not s.get("parts"):
             self.store.log_query(run_id=s["run_id"], username=user.username, role=user.role, conversation_id=s["conversation_id"],
-                                 question=s.get("question_display") or s["question"], sql=s.get("sql"), status=s["status"],
+                                 question=s.get("question_display") or s["question"], sql=s.get("sql"),
+                                 status="refused" if s.get("refused") else s["status"],
                                  error=s.get("error"), est_bytes=(s.get("cost") or {}).get("total_bytes"),
                                  rows=(s.get("result") or {}).get("row_count") or (len(s.get("executed", [])) if s.get("variance") else None),
                                  latency_ms=int((time.time() - s["t0"]) * 1000), retries=s["attempts"], llm_mode=s["mode"],
                                  source=s.get("sql_source") or ("variance" if s.get("variance") else s.get("intent")),
                                  plan=s.get("plan"), lint=s.get("lint"), approved_by=s.get("approved_by"))
+        return END
+
+    def _finalize_subtask(self, s, resp):
+        """Ý con của câu nhiều ý: không ghi bộ nhớ/tin nhắn (câu cha ghi một lần). Ý cần hỏi lại thì đưa các lựa chọn thành
+        câu hỏi bấm được, vì trạng thái “đang chờ chọn” của hội thoại chỉ giữ được một câu hỏi lại."""
+        if s["status"] == "clarification":
+            c, sem = s["clarification"], get_semantic()
+            opts = []
+            for o in c.get("options") or []:
+                if o.get("rewrite"):
+                    opts.append(o["rewrite"])
+                elif o.get("metric") in sem.metrics:
+                    opts.append(f"{s['question'].rstrip(' ?')} (tính theo {sem.metrics[o['metric']]['label'].lower()})")
+                elif o.get("label"):
+                    opts.append(f"{s['question'].rstrip(' ?')} ({o['label']})")
+            resp.update(type="info", text="🤔 " + (c.get("question_text") or "Ý này cần bạn nói rõ hơn:"),
+                        suggestions=opts[:4], clarification=None)
+        resp["task"] = s["question"]
+        if not s["eval_mode"] and (s["status"] not in ("clarification", "info") or s.get("sql")):
+            u = s["user"]
+            self.store.log_query(run_id=s["run_id"], username=u.username, role=u.role, conversation_id=s["conversation_id"],
+                                 question=s["question"], sql=s.get("sql"), status=s["status"], error=s.get("error"),
+                                 est_bytes=(s.get("cost") or {}).get("total_bytes"),
+                                 rows=(s.get("result") or {}).get("row_count"),
+                                 latency_ms=int((time.time() - s["t0"]) * 1000), retries=s["attempts"], llm_mode=s["mode"],
+                                 source=s.get("sql_source") or s.get("intent"), plan=s.get("plan"), lint=s.get("lint"),
+                                 approved_by=s.get("approved_by"))
         return END
 
     def _response(self, s) -> dict:
@@ -703,24 +1340,46 @@ class Agent:
         }
         if s["status"] == "clarification":
             c = s["clarification"]
-            resp["clarification"] = {"id": c["id"], "question": c.get("question_text"), "options": [o["label"] for o in c["options"]]}
+            resp["clarification"] = {"id": c["id"], "question": c.get("question_text"), "options": [o["label"] for o in c["options"]],
+                                     "details": [profile.metric_brief(o.get("metric"), profile._option_hint(o.get("metric")))
+                                                 for o in c["options"]]}
             resp["text"] = c.get("question_text")
         if s["status"] == "pending_approval":
             resp["text"] = ("Truy vấn cần bạn xem lại SQL và xác nhận trước khi chạy: " + " ".join(s["cost"].get("reasons", [])))
         if s.get("variance"):
             resp["variance"] = {k: s["variance"][k] for k in ("metric_label", "format", "period_now", "period_prev", "total",
                                                                   "significance", "drivers", "best_dimension", "drill",
-                                                                  "decomposition", "root_causes", "queries")}
+                                                                  "decomposition", "root_causes", "hypotheses", "queries")
+                                if k in s["variance"]}
         for k in ("metric_cards", "schema_tables", "suggestions"):
             if s.get(k):
                 resp[k] = s[k]
         # phần dành cho giao diện thân thiện: câu này có phải do bộ luật trả lời thay LLM không, chỉ số được tính theo
         # định nghĩa nào, và có thể hỏi tiếp điều gì (đều dựng bằng code từ kế hoạch vừa chạy)
-        resp["fallback"] = s.get("llm_fallback")
+        resp["fallback"] = None
+        resp["llm_error"] = s.get("llm_error")
+        resp["path"] = s.get("path") or ("llm" if s.get("route") or s.get("claude") else "code")
+        resp["route"] = s.get("route")
+        resp["critic"] = s.get("critic")
+        if s.get("parts"):          # câu nhiều ý: mỗi phần là một câu trả lời đầy đủ (bảng, biểu đồ, kiểm chứng riêng)
+            resp.update(type="multi", parts=s["parts"], rows=None, columns=None, chart=None, facts=None, sql=None)
         if s["status"] == "success":
-            resp["definitions"] = _definitions(s)
-            resp["follow_ups"] = _follow_ups(s)
+            resp["definitions"] = [] if s.get("lookup") else _definitions(s)
+            resp["follow_ups"] = s.get("lookup_follow_ups") or [] if s.get("lookup") else _follow_ups(s)
+        pending = s.get("pending_tasks") or []
+        if pending:     # câu nhiều ý: các ý chưa trả lời đứng đầu phần "Hỏi tiếp" để người dùng bấm xem tiếp
+            resp["follow_ups"] = list(dict.fromkeys(pending + (resp.get("follow_ups") or [])))[:6]
+            resp["pending_tasks"] = pending
+            if s["status"] != "success":
+                resp["suggestions"] = list(dict.fromkeys(pending + (resp.get("suggestions") or [])))[:6]
         return resp
+
+
+def _fold(text: str) -> str:
+    """Bỏ dấu tiếng Việt, chữ thường, nhưng GIỮ dấu câu (norm() bỏ cả dấu phẩy/chấm phẩy, cần để nhận câu nhiều mệnh đề)."""
+    import unicodedata
+    t = unicodedata.normalize("NFD", (text or "").lower().replace("đ", "d"))
+    return re.sub(r"\s+", " ", "".join(c for c in t if not unicodedata.combining(c)))
 
 
 def _definitions(s) -> list[dict]:
@@ -762,6 +1421,14 @@ def _follow_ups(s, limit: int = 4) -> list[str]:
     if period and additive:
         out.append(f"Tìm nguyên nhân biến động {label} {period}")
     return out[:limit]
+
+
+def _no_numbers(meta, r) -> bool:
+    """Kết quả không có con số nào: không có dòng, hoặc mọi ô chỉ số đều NULL."""
+    if not r["rows"]:
+        return True
+    idx = [i for i, m in enumerate(meta or []) if m.get("kind") == "metric" and i < len(r["columns"])]
+    return bool(idx) and all(row[i] is None for row in r["rows"] for i in idx)
 
 
 def _cost_public(c):

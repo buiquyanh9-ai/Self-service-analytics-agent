@@ -305,6 +305,32 @@ def _binder_hint(msg: str) -> str | None:
     return None
 
 
+def restricted_request(question: str, user: UserCtx) -> list[str]:
+    """Các cột PII/mật (bị chặn với vai trò này) mà câu hỏi nhắc tới, theo mô tả và tên gọi khác trong catalog.
+
+    Dùng để từ chối rõ ràng ("không được xem số điện thoại") thay vì hiểu nhầm câu hỏi thành một chỉ số khác.
+    """
+    from .textutil import norm
+    deny = set(user.role_cfg.get("deny_sensitivity") or [])
+    if not deny:
+        return []
+    t = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", norm(question))).strip()
+    hits = []
+    for tab in get_catalog().visible_tables(user.role_cfg):
+        for c in tab["columns"].values():
+            if c.get("sensitivity") not in deny:
+                continue
+            head = re.split(r"\s*(?:->|\(|—|:|;|,)", c.get("description") or "")[0].strip()
+            for p in [head] + list(c.get("synonyms") or []):
+                pn = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", norm(p))).strip()
+                if len(pn) >= 4 and re.search(r"(?<![a-z0-9])" + re.escape(pn) + r"(?![a-z0-9])", t):
+                    label = head or c["name"]
+                    if label not in hits:
+                        hits.append(label)
+                    break
+    return hits
+
+
 def pretty(sql: str) -> str:
     try:
         return sqlglot.transpile(strip_sql(sql), read=DIALECT, write=DIALECT, pretty=True)[0]
