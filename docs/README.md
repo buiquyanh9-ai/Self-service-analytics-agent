@@ -10,6 +10,7 @@ hộp thoại **Cách tính** và **Xem SQL**, ngăn bên **Từ điển chỉ s
 | Dùng thử: hỏi số liệu, đọc câu trả lời | [02 · Hướng dẫn sử dụng](02-huong-dan-su-dung.md) | 10 phút |
 | Cài và chạy trên máy mình | [03 · Chạy trên máy cá nhân](03-chay-local.md) | 15 phút |
 | Hiểu hệ thống làm việc thế nào, dùng kỹ thuật gì | [01 · Kỹ thuật và phương pháp](01-ky-thuat-va-phuong-phap.md) | 20 phút |
+| Xem ảnh demo, API và kết quả đánh giá chi tiết | [05 · Tham chiếu chi tiết](05-tham-chieu.md) | Tra cứu |
 | Đưa lên mạng cho người khác dùng | [04 · Deploy lên web](04-deploy-len-web.md) | 15 phút |
 
 ## Hệ thống này là gì
@@ -51,5 +52,5 @@ Ba điểm khác với việc hỏi thẳng một chatbot:
 |---|---|
 | Kiểm thử tự động | 141/141 đạt, không test nào gọi mạng |
 | Chạy thử server thật | Hai doanh nghiệp mẫu khởi động được; đăng nhập, hỏi đáp, phân tích nguyên nhân và 5 trang quản trị đều trả kết quả |
-| Độ đúng trên bộ câu hỏi | Xem bảng ở mục 6 của [README gốc](../README.md) và phần giới hạn trong [tài liệu 01](01-ky-thuat-va-phuong-phap.md#7-giới-hạn-cần-biết) |
+| Độ đúng trên bộ câu hỏi | Xem mục 6 trong [tham chiếu chi tiết](05-tham-chieu.md) và phần giới hạn trong [tài liệu 01](01-ky-thuat-va-phuong-phap.md#7-giới-hạn-cần-biết) |
 | Deploy lên web | **Chưa chạy thử.** File `Dockerfile` và `render.yaml` có sẵn nhưng chưa được build trên máy nào trong quá trình kiểm tra |
