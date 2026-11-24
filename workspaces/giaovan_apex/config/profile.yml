@@ -1,18 +1,18 @@
 # =====================================================================================
-# HỒ SƠ DOANH NGHIỆP — Công ty CP Giao vận XYZ (doanh nghiệp mẫu thứ hai, dữ liệu giả lập).
-# Khởi tạo bằng `python -m app.onboard giaovan_xyz`, sau đó được rà soát và viết lại bằng tay.
-# Chạy:  WORKSPACE=giaovan_xyz python -m uvicorn app.main:app
+# HỒ SƠ DOANH NGHIỆP — Công ty CP Giao vận Apex (doanh nghiệp mẫu thứ hai, dữ liệu giả lập).
+# Khởi tạo bằng `python -m app.onboard giaovan_apex`, sau đó được rà soát và viết lại bằng tay.
+# Chạy:  WORKSPACE=giaovan_apex python -m uvicorn app.main:app
 # =====================================================================================
 version: 1
 
 company:
-  name: Công ty CP Giao vận XYZ
-  short_name: XYZ
+  name: Công ty CP Giao vận Apex
+  short_name: Apex
   industry: chuyển phát hàng hóa
   description: Doanh nghiệp chuyển phát phục vụ khách cá nhân, shop online và doanh nghiệp, với mạng lưới trung tâm chia chọn và bưu cục ở ba miền.
 
 assistant:
-  name: Trợ lý dữ liệu XYZ
+  name: Sola                 # tên trợ lý AI; tên công ty nằm ở company
   language: Vietnamese
 
 warehouse:

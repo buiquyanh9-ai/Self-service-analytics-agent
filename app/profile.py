@@ -15,7 +15,7 @@ DEFAULTS = {
     "company": {"name": "doanh nghiệp của bạn", "short_name": "", "industry": "", "description": ""},
     "assistant": {"name": "Trợ lý dữ liệu", "language": "Vietnamese"},
     "warehouse": {"engine": "DuckDB", "schema": "dw", "schema_note": "", "anchor": None, "notes": [], "core_tables": []},
-    "domain_pack": None,      # gói kiểm tra theo ngành viết bằng code (vd retail_abc); không khai báo thì chỉ chạy phần tổng quát
+    "domain_pack": None,      # gói kiểm tra theo ngành viết bằng code (vd retail_astra); không khai báo thì chỉ chạy phần tổng quát
     "quality": {"skip_drift_columns": []},     # cột không đem kiểm trôi lệch phân phối (vd trạng thái có vòng đời)
     "console_example": "",    # câu SQL mẫu ở trang tự viết SQL; để trống thì biên dịch từ chỉ số đầu tiên
     "console_tries": [],      # vài lệnh để người dùng thử xem hệ thống chặn thế nào

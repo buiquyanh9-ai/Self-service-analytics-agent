@@ -1,6 +1,6 @@
 """Tra cứu danh mục và các ca trước đây trả số liệu sai mà không báo.
 
-Lỗi gốc: "cho tôi thông tin về mã SP0010" bị coi là câu lạc đề, "thông tin về CH036 ABC Phú Nhuận" thì "chưa hiểu";
+Lỗi gốc: "cho tôi thông tin về mã SP0010" bị coi là câu lạc đề, "thông tin về CH036 Astra Phú Nhuận" thì "chưa hiểu";
 "doanh thu thuần của SP0010" bỏ qua mã và trả doanh thu toàn công ty; "không tính Miền Bắc" trả về chính Miền Bắc;
 "Xóa các đơn bị hủy" trả về số đơn hủy; "tháng 13/2026" chạy trên toàn bộ lịch sử.
 """
@@ -40,13 +40,13 @@ def test_product_lookup_by_code(q):
     d = info(r)
     assert d["Mã sản phẩm"] == "SP0010" and d["Ngành hàng"] == "Điện thoại" and d["Giá bán lẻ niêm yết"] == "36.590.000 ₫"
     assert d["Nhà cung cấp"].startswith("Apple")           # khóa ngoại hiện tên, không hiện mã NCC01
-    assert any("ABC" not in f and "iPhone 16 Pro Max" in f for f in r["follow_ups"])
+    assert any("Astra" not in f and "iPhone 16 Pro Max" in f for f in r["follow_ups"])
 
 
-@pytest.mark.parametrize("q", ["cho tôi thông tin về CH036 ABC Phú Nhuận", "thông tin cửa hàng ABC Phú Nhuận"])
+@pytest.mark.parametrize("q", ["cho tôi thông tin về CH036 Astra Phú Nhuận", "thông tin cửa hàng Astra Phú Nhuận"])
 def test_store_lookup_by_code_or_name(q):
     r = ask(q)
-    assert r["intent"] == "lookup" and "ABC Phú Nhuận" in r["text"] and "CH036" in r["text"]
+    assert r["intent"] == "lookup" and "Astra Phú Nhuận" in r["text"] and "CH036" in r["text"]
     d = info(r)
     assert d["Tỉnh/thành phố"] == "TP.HCM" and d["Vùng miền"] == "Miền Nam" and d["Kho"] == "Kho tổng TP.HCM"
     assert "Ngày đóng cửa" not in d                          # ô trống không hiện
@@ -67,7 +67,7 @@ def test_lookup_hides_pii_for_analyst_but_not_for_admin():
 
 
 def test_lookup_respects_row_level_security():
-    r = ask("thông tin về CH036 ABC Phú Nhuận", user=BAC)          # cửa hàng Miền Nam, tài khoản chỉ xem Miền Bắc
+    r = ask("thông tin về CH036 Astra Phú Nhuận", user=BAC)          # cửa hàng Miền Nam, tài khoản chỉ xem Miền Bắc
     assert r["intent"] == "lookup" and not r["rows"] and "phạm vi" in r["text"]
     assert "dw.dim_cn" in r["validation"]["rls_applied"] and "TP.HCM" not in r["text"]
 
@@ -82,16 +82,16 @@ def test_unknown_code():
 # ------------------------------------------------------------------ liệt kê, đếm, xếp theo thuộc tính
 def test_list_count_and_rank():
     r = ask("những cửa hàng nào đã đóng cửa")
-    assert r["intent"] == "lookup" and [row[1] for row in r["rows"]] == ["ABC Hải An"] and r["audit"]["ok"]
+    assert r["intent"] == "lookup" and [row[1] for row in r["rows"]] == ["Astra Hải An"] and r["audit"]["ok"]
     r = ask("có bao nhiêu sản phẩm đang kinh doanh")          # trước đây khớp nhầm thành chỉ số "số lượng bán"
     assert r["intent"] == "lookup" and r["rows"][0][0] < 299 and r["audit"]["ok"]
     r = ask("danh sách cửa hàng ở Hà Nội")
     assert r["rows"] and all(row[3] == "Hà Nội" for row in r["rows"])
     r = ask("cửa hàng nào mới mở gần đây nhất")
-    assert len(r["rows"]) == 1 and "ABC Phú Nhuận" in r["text"]
+    assert len(r["rows"]) == 1 and "Astra Phú Nhuận" in r["text"]
     r = ask("top 5 sản phẩm có giá niêm yết cao nhất")
     assert r["intent"] == "lookup" and len(r["rows"]) == 5
-    r = ask("có bao nhiêu nhân viên ở ABC Phú Nhuận")
+    r = ask("có bao nhiêu nhân viên ở Astra Phú Nhuận")
     assert r["intent"] == "lookup" and r["rows"][0][0] > 0
 
 
@@ -104,7 +104,7 @@ def test_codes_become_filters_in_metric_questions():
     r = ask("Doanh thu thuần của SP0010 tháng 10/2026")
     assert r["type"] == "result" and r["plan"]["filters"] == [{"dimension": "san_pham", "op": "in", "values": ["iPhone 16 Pro Max"]}]
     by_code = ask("Doanh thu thuần cửa hàng CH036 tháng 10/2026")
-    by_name = ask("Doanh thu thuần cửa hàng ABC Phú Nhuận tháng 10/2026")
+    by_name = ask("Doanh thu thuần cửa hàng Astra Phú Nhuận tháng 10/2026")
     assert by_code["rows"] == by_name["rows"] and len(by_code["rows"]) == 1
 
 
@@ -198,7 +198,7 @@ def test_forecasts_are_declined(q):
 
 
 def test_empty_results_are_explained():
-    r = ask("Doanh thu thuần cửa hàng ABC Hải An tháng 6/2026")          # đóng cửa 30/04/2026
+    r = ask("Doanh thu thuần cửa hàng Astra Hải An tháng 6/2026")          # đóng cửa 30/04/2026
     assert r["type"] == "result" and r["text"].startswith("Không có số liệu") and r["audit"]["ok"]
     r = ask("Doanh thu thuần Miền Nam tháng 10/2026", user=BAC)
     assert r["text"].startswith("Không có số liệu") and "phân quyền" in r["text"]

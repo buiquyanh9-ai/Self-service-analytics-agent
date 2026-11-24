@@ -8,7 +8,7 @@
 #   - plan: free tự ngủ sau một lúc không có truy cập và mất dữ liệu chạy (hội thoại, nhật ký) khi khởi động lại.
 services:
   - type: web
-    name: data01-dienmay-abc
+    name: data01-dienmay-astra
     runtime: docker
     plan: free
     healthCheckPath: /api/health
@@ -28,13 +28,13 @@ services:
       - key: SUPABASE_JWT_SECRET   # tùy chọn: chấp nhận access token của Supabase Auth
         sync: false
   - type: web
-    name: data01-giaovan-xyz
+    name: data01-giaovan-apex
     runtime: docker
     plan: free
     healthCheckPath: /api/health
     envVars:
       - key: WORKSPACE
-        value: giaovan_xyz
+        value: giaovan_apex
       - key: APP_SECRET
         generateValue: true
       - key: PASSWORD_ADMIN

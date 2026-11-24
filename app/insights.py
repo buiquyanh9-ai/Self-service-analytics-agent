@@ -247,7 +247,7 @@ def analyze(plan: dict, run, anchor: dt.date, hypothesize=None, deadline: float 
             pass
 
     # 5. nguyên nhân gốc: gói kiểm tra theo ngành (nếu hồ sơ doanh nghiệp bật) + kiểm tra chung
-    if profile.domain_pack() == "retail_abc":
+    if profile.domain_pack() == "retail_astra":
         seg_filters = list(filters)
         if best and additive and best["dimension"] in ("vung", "chi_nhanh", "kenh", "loai_ch", "nganh_hang"):
             seg_filters = filters + [{"dimension": best["dimension"], "op": "in", "values": [best["items"][0]["member"]]}]

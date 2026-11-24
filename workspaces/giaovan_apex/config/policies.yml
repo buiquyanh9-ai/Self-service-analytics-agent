@@ -1,5 +1,5 @@
 # =====================================================================================
-# GOVERNANCE — Công ty CP Giao vận XYZ: RBAC (vai trò) + RLS (lọc dòng theo miền) + giới hạn chi phí quét.
+# GOVERNANCE — Công ty CP Giao vận Apex: RBAC (vai trò) + RLS (lọc dòng theo miền) + giới hạn chi phí quét.
 # Tài khoản dưới đây chỉ để chạy thử trên dữ liệu giả lập; triển khai thật phải đổi mật khẩu.
 # =====================================================================================
 roles:

@@ -5,11 +5,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 # Dữ liệu giả của cả hai doanh nghiệp mẫu được sinh ngay lúc build image (scale nhỏ hơn cho gói miễn phí).
-# Chọn doanh nghiệp lúc chạy bằng biến WORKSPACE: để trống = ABC, WORKSPACE=giaovan_xyz = Giao vận XYZ.
+# Chọn doanh nghiệp lúc chạy bằng biến WORKSPACE: để trống = Astra, WORKSPACE=giaovan_apex = Giao vận Apex.
 ARG DATA_SCALE=0.5
 RUN python warehouse/generate.py --scale ${DATA_SCALE} && python warehouse/build.py \
- && python workspaces/giaovan_xyz/warehouse/generate.py --scale ${DATA_SCALE} \
- && python -m app.onboard giaovan_xyz --stats
+ && python workspaces/giaovan_apex/warehouse/generate.py --scale ${DATA_SCALE} \
+ && python -m app.onboard giaovan_apex --stats
 ENV PORT=8000
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

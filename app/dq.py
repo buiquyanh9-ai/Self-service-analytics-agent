@@ -84,11 +84,11 @@ def run_checks() -> dict:
                          table=table, evidence=det,
                          recommendation="Cập nhật config/contracts.yml và model staging nếu cột mới có giá trị nghiệp vụ."))
 
-    if profile.domain_pack() != "retail_abc":
+    if profile.domain_pack() != "retail_astra":
         # doanh nghiệp không khai báo gói ngành: chạy bộ kiểm định tổng quát dựng từ catalog và semantic layer
         return _finish(fs + _generic_checks(wh, cat, anchor), active, anchor, t0)
 
-    # ===== Gói retail_abc: các kiểm định biết trước cấu trúc nguồn POS/ERP/CRM của doanh nghiệp bán lẻ mẫu =====
+    # ===== Gói retail_astra: các kiểm định biết trước cấu trúc nguồn POS/ERP/CRM của doanh nghiệp bán lẻ mẫu =====
     # 2. mã trạng thái chưa map
     rows = wh.fetch("SELECT nguon, trang_thai_goc, COUNT(*) FROM stg.stg_don_hang WHERE trang_thai = 'KHAC' GROUP BY 1, 2 ORDER BY 3 DESC")
     if rows:

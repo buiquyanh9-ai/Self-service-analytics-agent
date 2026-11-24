@@ -49,13 +49,13 @@ def test_agent_answers_intro_without_calling_llm(monkeypatch):
 
 def test_system_prompt_follows_profile(monkeypatch):
     assert profile.get_profile()["company"]["name"] in llm.system_prompt()
-    other = {"company": {"name": "Chuỗi Nhà thuốc XYZ", "industry": "bán lẻ dược phẩm"},
+    other = {"company": {"name": "Chuỗi Nhà thuốc Minh An", "industry": "bán lẻ dược phẩm"},
              "warehouse": {"engine": "DuckDB", "schema": "pharma", "notes": ["Prescription lines live in pharma.fct_rx."]}}
     monkeypatch.setattr(config, "profile", lambda: other)
     sp = llm.system_prompt()
-    assert "Chuỗi Nhà thuốc XYZ" in sp and "bán lẻ dược phẩm" in sp and "pharma.table_name" in sp
+    assert "Chuỗi Nhà thuốc Minh An" in sp and "bán lẻ dược phẩm" in sp and "pharma.table_name" in sp
     assert "Prescription lines live in pharma.fct_rx." in sp
-    assert "ABC" not in sp and "fct_ct_dh" not in sp and "__" not in sp
+    assert "Astra" not in sp and "fct_ct_dh" not in sp and "__" not in sp
 
 
 def test_sample_questions_fall_back_to_semantic_layer(monkeypatch):

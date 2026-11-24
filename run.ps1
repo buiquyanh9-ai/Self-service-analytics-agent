@@ -1,5 +1,5 @@
 ﻿# Khởi chạy DATA-01 trên Windows (PowerShell):  .\run.ps1        (thêm -Rebuild để sinh lại dữ liệu)
-# Doanh nghiệp khác:  .\run.ps1 -Workspace giaovan_xyz -Port 8001     (bỏ -Workspace = doanh nghiệp mẫu ABC ở gốc dự án)
+# Doanh nghiệp khác:  .\run.ps1 -Workspace giaovan_apex -Port 8001     (bỏ -Workspace = doanh nghiệp mẫu Astra ở gốc dự án)
 param([switch]$Rebuild, [double]$Scale = 1.0, [int]$Port = 8000, [string]$Workspace = "")
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot

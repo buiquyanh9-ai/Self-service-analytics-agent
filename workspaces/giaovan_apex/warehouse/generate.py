@@ -1,11 +1,11 @@
 """
-Sinh dữ liệu GIẢ LẬP cho doanh nghiệp mẫu thứ hai: Công ty CP Giao vận XYZ (chuyển phát hàng hóa).
+Sinh dữ liệu GIẢ LẬP cho doanh nghiệp mẫu thứ hai: Công ty CP Giao vận Apex (chuyển phát hàng hóa).
 
-Mục đích: kiểm chứng hệ thống chạy được với một doanh nghiệp khác hẳn công ty điện máy ABC
+Mục đích: kiểm chứng hệ thống chạy được với một doanh nghiệp khác hẳn công ty điện máy Astra
 (ngành khác, schema khác, quy ước đặt tên khác, bộ chỉ số khác) chỉ bằng cách đổi bộ file cấu hình.
 Toàn bộ số liệu là giả lập, sinh từ seed cố định nên chạy lại cho đúng cùng một kho.
 
-    python workspaces/giaovan_xyz/warehouse/generate.py            # ghi workspaces/giaovan_xyz/var/warehouse.duckdb
+    python workspaces/giaovan_apex/warehouse/generate.py            # ghi workspaces/giaovan_apex/var/warehouse.duckdb
 
 Ba sự kiện được cài sẵn để kiểm thử câu hỏi "vì sao":
   1. 10–25/06/2026: mưa bão Miền Trung, thời gian giao tới các bưu cục Miền Trung tăng mạnh (tỷ lệ đúng hạn giảm).

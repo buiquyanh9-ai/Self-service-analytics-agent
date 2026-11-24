@@ -7,13 +7,13 @@
 version: 1
 
 company:
-  name: Công ty CP Bán lẻ Điện máy ABC
-  short_name: ABC
+  name: Công ty CP Bán lẻ Điện máy Astra
+  short_name: Astra
   industry: bán lẻ điện máy
   description: Chuỗi bán lẻ điện máy đa kênh tại Việt Nam, bán qua cửa hàng, website, ứng dụng di động và sàn thương mại điện tử.
 
 assistant:
-  name: Trợ lý dữ liệu ABC
+  name: Sola                 # tên trợ lý AI (giống nhau ở mọi doanh nghiệp); tên công ty nằm ở company
   language: Vietnamese
 
 warehouse:
@@ -34,7 +34,7 @@ warehouse:
 # Gói kiểm tra theo ngành viết bằng code: kiểm định chất lượng dữ liệu nguồn POS/ERP và các nguyên nhân gốc của
 # bán lẻ (lệch đơn vị giá, đóng cửa hàng, hết hàng, lịch khuyến mãi). Doanh nghiệp khác bỏ dòng này: hệ thống
 # vẫn chạy phần kiểm tra tổng quát dựng từ catalog và semantic layer.
-domain_pack: retail_abc
+domain_pack: retail_astra
 
 # Trang tự viết SQL: câu mẫu cố ý dùng sai tên cột (thanh_tien) và điều kiện YEAR() để người dùng thấy hệ thống
 # tự sửa tên cột theo catalog và cảnh báo mất cắt phân vùng; kèm vài lệnh sẽ bị chặn.

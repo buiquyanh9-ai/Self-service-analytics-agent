@@ -18,7 +18,7 @@ from app import config, insights, onboard
 from app.semantic import get_semantic
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-XYZ = ROOT / "workspaces" / "giaovan_xyz"
+APEX = ROOT / "workspaces" / "giaovan_apex"
 
 PROBE = r"""
 import json, sys
@@ -83,11 +83,11 @@ def _run(workspace: str, code: str) -> subprocess.CompletedProcess:
 
 
 @pytest.fixture(scope="module")
-def xyz():
-    if not (XYZ / "var" / "warehouse.duckdb").exists() or not (XYZ / "var" / "catalog_stats.json").exists():
-        pytest.skip("Chưa có kho của workspace mẫu. Chạy: python workspaces/giaovan_xyz/warehouse/generate.py "
-                    "&& python -m app.onboard giaovan_xyz --stats")
-    p = _run("giaovan_xyz", PROBE)
+def apex():
+    if not (APEX / "var" / "warehouse.duckdb").exists() or not (APEX / "var" / "catalog_stats.json").exists():
+        pytest.skip("Chưa có kho của workspace mẫu. Chạy: python workspaces/giaovan_apex/warehouse/generate.py "
+                    "&& python -m app.onboard giaovan_apex --stats")
+    p = _run("giaovan_apex", PROBE)
     line = next((l for l in p.stdout.splitlines() if l.startswith("PROBE=")), None)
     assert line, p.stderr[-2000:]
     return json.loads(line[len("PROBE="):])
@@ -96,7 +96,7 @@ def xyz():
 # ------------------------------------------------------------------ chọn workspace
 def test_default_workspace_is_the_sample_business_at_project_root():
     assert config.WORKSPACE == "" and config.CONFIG == ROOT / "config" and config.VAR == ROOT / "var"
-    assert "" in config.list_workspaces() and "giaovan_xyz" in config.list_workspaces()
+    assert "" in config.list_workspaces() and "giaovan_apex" in config.list_workspaces()
 
 
 def test_unknown_workspace_stops_with_a_helpful_message():
@@ -105,60 +105,60 @@ def test_unknown_workspace_stops_with_a_helpful_message():
 
 
 # ------------------------------------------------------------------ doanh nghiệp thứ hai chạy bằng cấu hình riêng
-def test_second_business_introduces_itself_from_its_own_profile(xyz):
-    assert xyz["company"] == "Công ty CP Giao vận XYZ" and xyz["schema"] == "mart"
-    assert "Trợ lý dữ liệu XYZ" in xyz["who"]["text"] and "chuyển phát" in xyz["who"]["text"]
-    assert "ABC" not in xyz["intro"] and "doanh thu thuần" not in xyz["intro"].lower()
+def test_second_business_introduces_itself_from_its_own_profile(apex):
+    assert apex["company"] == "Công ty CP Giao vận Apex" and apex["schema"] == "mart"
+    assert "Sola" in apex["who"]["text"] and "Giao vận Apex" in apex["who"]["text"] and "chuyển phát" in apex["who"]["text"]
+    assert "Astra" not in apex["intro"] and "doanh thu thuần" not in apex["intro"].lower()
 
 
-def test_second_business_answers_with_its_own_metric_definition(xyz):
-    r = xyz["by_region"]
+def test_second_business_answers_with_its_own_metric_definition(apex):
+    r = apex["by_region"]
     assert r["type"] == "result" and "s.status <> 'CANCELLED'" in r["sql"] and "mart.dim_hub" in r["sql"]
     assert sorted(x[0] for x in r["rows"]) == ["Miền Bắc", "Miền Nam", "Miền Trung"]
 
 
-def test_second_business_has_its_own_ambiguous_terms(xyz):
-    """"Doanh thu" ở XYZ là cước ghi nhận hay cước phát sinh; "sản lượng" là số đơn hay số kg — khác hẳn ABC."""
-    assert xyz["revenue"]["type"] == "clarification"
-    assert any("Cước phát sinh" in o for o in xyz["revenue"]["options"]) and not any("thuần" in o for o in xyz["revenue"]["options"])
-    assert xyz["volume"]["type"] == "clarification" and any("kg" in o for o in xyz["volume"]["options"])
+def test_second_business_has_its_own_ambiguous_terms(apex):
+    """"Doanh thu" ở Apex là cước ghi nhận hay cước phát sinh; "sản lượng" là số đơn hay số kg — khác hẳn Astra."""
+    assert apex["revenue"]["type"] == "clarification"
+    assert any("Cước phát sinh" in o for o in apex["revenue"]["options"]) and not any("thuần" in o for o in apex["revenue"]["options"])
+    assert apex["volume"]["type"] == "clarification" and any("kg" in o for o in apex["volume"]["options"])
 
 
-def test_second_business_context_changes_which_dimension_a_value_filters(xyz):
-    assert "dest_hub.region IN ('Miền Trung')" in xyz["dest"]["sql"]          # "giao tới" = miền phát, không phải miền gửi
+def test_second_business_context_changes_which_dimension_a_value_filters(apex):
+    assert "dest_hub.region IN ('Miền Trung')" in apex["dest"]["sql"]          # "giao tới" = miền phát, không phải miền gửi
 
 
-def test_second_business_variance_analysis_runs_without_the_retail_pack(xyz):
-    assert xyz["why"]["type"] == "variance" and xyz["why"]["best_dimension"] in ("mien", "tinh", "buu_cuc", "phan_khuc")
+def test_second_business_variance_analysis_runs_without_the_retail_pack(apex):
+    assert apex["why"]["type"] == "variance" and apex["why"]["best_dimension"] in ("mien", "tinh", "buu_cuc", "phan_khuc")
 
 
-def test_second_business_governance_follows_its_own_policies(xyz):
-    assert xyz["pii"] == "FORBIDDEN_COLUMN"
-    assert xyz["other_business_table"] == "FORBIDDEN_SCHEMA"                   # schema dw không tồn tại ở doanh nghiệp này
-    assert xyz["system_schema"] == "FORBIDDEN_SCHEMA"
-    assert xyz["default_schema"] == ["mart.fact_shipment"]
-    assert [r[0] for r in xyz["rls_rows"]] == ["Miền Trung"]
-    assert "L006" in xyz["lint"]                                                # tổng cước mà không lọc trạng thái
+def test_second_business_governance_follows_its_own_policies(apex):
+    assert apex["pii"] == "FORBIDDEN_COLUMN"
+    assert apex["other_business_table"] == "FORBIDDEN_SCHEMA"                   # schema dw không tồn tại ở doanh nghiệp này
+    assert apex["system_schema"] == "FORBIDDEN_SCHEMA"
+    assert apex["default_schema"] == ["mart.fact_shipment"]
+    assert [r[0] for r in apex["rls_rows"]] == ["Miền Trung"]
+    assert "L006" in apex["lint"]                                                # tổng cước mà không lọc trạng thái
 
 
-def test_second_business_gets_generic_data_quality_checks(xyz):
-    assert "freshness" in xyz["dq"] and "distribution_drift" in xyz["dq"]
+def test_second_business_gets_generic_data_quality_checks(apex):
+    assert "freshness" in apex["dq"] and "distribution_drift" in apex["dq"]
 
 
-def test_second_business_never_shows_the_other_business_lineage(xyz):
+def test_second_business_never_shows_the_other_business_lineage(apex):
     """Workspace nhận kho dựng sẵn không có models.sql: sơ đồ nguồn gốc phải rỗng, không được lấy của doanh nghiệp mẫu ở gốc."""
-    assert xyz["lineage_nodes"] == []
-    assert not (XYZ / "var" / "model_lineage.json").exists()
+    assert apex["lineage_nodes"] == []
+    assert not (APEX / "var" / "model_lineage.json").exists()
 
 
-def test_second_business_sql_page_uses_its_own_example(xyz):
-    assert "mart.fact_shipment" in xyz["console_example"] and "dw." not in xyz["console_example"] and xyz["console_example_ok"]
-    assert xyz["console_tries"][0] == "DROP TABLE mart.fact_shipment"
+def test_second_business_sql_page_uses_its_own_example(apex):
+    assert "mart.fact_shipment" in apex["console_example"] and "dw." not in apex["console_example"] and apex["console_example_ok"]
+    assert apex["console_tries"][0] == "DROP TABLE mart.fact_shipment"
 
 
-def test_second_business_welcome_questions_all_get_answers(xyz):
-    assert len(xyz["starters"]) >= 4
-    assert all(t in ("result", "variance", "info", "clarification") for t in xyz["starters"].values()), xyz["starters"]
+def test_second_business_welcome_questions_all_get_answers(apex):
+    assert len(apex["starters"]) >= 4
+    assert all(t in ("result", "variance", "info", "clarification") for t in apex["starters"].values()), apex["starters"]
 
 
 # ------------------------------------------------------------------ phân tích biến động không cần khai báo

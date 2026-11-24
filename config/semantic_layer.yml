@@ -414,7 +414,7 @@ nlu:
       note: "Mình không quyết định thay bạn, nhưng đây là số liệu để cân nhắc: số lượng bán {period}, tồn kho tại ngày chốt
              gần nhất và hàng đang về. Tồn kho cao so với sức bán thì chưa cần nhập thêm."
   value_forms:             # biến thể của tên giá trị: bỏ tiền tố (strip), thêm tiền tố (prefixes), có nhận tên trần không (bare)
-    chi_nhanh: {strip: ["ABC "], prefixes: [cua hang, chi nhanh, abc], bare: true}
+    chi_nhanh: {strip: ["Astra "], prefixes: [cua hang, chi nhanh, astra], bare: true}
     kho: {strip: ["Kho tổng ", "Kho "], prefixes: [kho, kho tong], bare: false}
     khuyen_mai: {strip_regex: '\s*\d{4}$', bare: true}
   alias_sql:               # tên gọi khác lấy từ bảng tra cứu trong kho: (tên gọi khác, giá trị chuẩn)

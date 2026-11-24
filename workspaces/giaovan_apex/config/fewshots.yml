@@ -1,4 +1,4 @@
-# Ví dụ câu hỏi -> SQL đã xác nhận của XYZ: các câu semantic layer không diễn đạt được (xếp hạng theo thực thể,
+# Ví dụ câu hỏi -> SQL đã xác nhận của Apex: các câu semantic layer không diễn đạt được (xếp hạng theo thực thể,
 # danh sách có điều kiện). Dùng làm ví dụ trong prompt cho LLM và tái sử dụng khi câu hỏi gần như trùng.
 - question: "Top 10 khách hàng có doanh thu cước ghi nhận cao nhất năm 2025"
   sql: |

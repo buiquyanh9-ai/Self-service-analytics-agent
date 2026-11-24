@@ -1,5 +1,5 @@
 # =====================================================================================
-# DATA CATALOG — Công ty CP Giao vận XYZ. Mô tả nghiệp vụ cho bảng/cột của schema mart.
+# DATA CATALOG — Công ty CP Giao vận Apex. Mô tả nghiệp vụ cho bảng/cột của schema mart.
 # Khung file do `python -m app.onboard` sinh (tên bảng, tên cột, cột nhạy cảm đoán theo tên); phần mô tả viết tay.
 # sensitivity: pii | confidential  -> bị chặn với vai trò analyst (xem policies.yml)
 # =====================================================================================

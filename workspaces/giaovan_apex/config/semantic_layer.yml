@@ -1,5 +1,5 @@
 # =====================================================================================
-# TẦNG NGỮ NGHĨA — Công ty CP Giao vận XYZ. Nguồn sự thật duy nhất về định nghĩa chỉ số.
+# TẦNG NGỮ NGHĨA — Công ty CP Giao vận Apex. Nguồn sự thật duy nhất về định nghĩa chỉ số.
 # Khung (model, đường join, cột phân loại) do `python -m app.onboard` nhận diện; nhãn, từ đồng nghĩa,
 # công thức, bộ lọc trạng thái và thuật ngữ mơ hồ được viết tay theo nghiệp vụ chuyển phát.
 # Quy ước: bí danh `hub` luôn là bưu cục GỬI (với vận đơn), bưu cục tiếp nhận (với khiếu nại),
@@ -30,6 +30,9 @@ models:
     grain: "1 dòng = 1 khiếu nại về 1 vận đơn"
     joins:
       hub: {table: mart.dim_hub, on: "c.hub_id = hub.hub_id"}
+      # vận đơn bị khiếu nại (nhiều khiếu nại -> một vận đơn: không nhân dòng); bí danh riêng để các chiều của vận đơn
+      # (s.*) không tự áp lên khiếu nại
+      ship: {table: mart.fact_shipment, on: "c.shipment_id = ship.shipment_id"}
 
   chi_phi:
     label: Chi phí vận hành bưu cục
@@ -217,6 +220,16 @@ metrics:
     owner: Phòng Chăm sóc khách hàng
     description: "Số giờ trung bình từ lúc tiếp nhận đến lúc xử lý xong một khiếu nại."
     synonyms: [thời gian xử lý khiếu nại, xử lý khiếu nại mất bao lâu]
+  so_khach_khieu_nai:
+    label: Số khách hàng bị khiếu nại
+    model: khieu_nai
+    sql: "COUNT(DISTINCT ship.customer_id)"
+    format: number
+    additive: false
+    owner: Phòng Chăm sóc khách hàng
+    description: "Số khách hàng (người gửi) khác nhau có ít nhất một vận đơn bị khiếu nại, theo ngày khiếu nại."
+    synonyms: [số khách hàng bị khiếu nại, khách hàng bị khiếu nại, khách hàng có đơn bị khiếu nại, khách hàng có vận đơn bị khiếu nại,
+               số khách hàng khiếu nại, khách hàng khiếu nại, số khách khiếu nại]
   ty_le_khieu_nai:
     label: Tỷ lệ khiếu nại (%)
     type: derived
@@ -316,7 +329,7 @@ ambiguities:
     pref_key: revenue_metric
     triggers: [doanh thu]
     unless_any: [ghi nhận, phát sinh, thực thu, kế toán, doanh số]
-    question: "“Doanh thu” ở XYZ có hai cách tính. Bạn muốn dùng cách nào?"
+    question: "“Doanh thu” ở Apex có hai cách tính. Bạn muốn dùng cách nào?"
     options:
       - {label: "Doanh thu cước ghi nhận (Kế toán) — chỉ đơn đã giao hoặc đã hoàn", metric: doanh_thu_cuoc}
       - {label: "Cước phát sinh (Kinh doanh) — mọi vận đơn đã nhận, trừ đơn hủy", metric: cuoc_phat_sinh}

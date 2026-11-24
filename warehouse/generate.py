@@ -1,5 +1,5 @@
 """
-Sinh dữ liệu giả cho kho dữ liệu doanh nghiệp bán lẻ "Công ty CP Bán lẻ Điện máy ABC" (hư cấu).
+Sinh dữ liệu giả cho kho dữ liệu doanh nghiệp bán lẻ "Công ty CP Bán lẻ Điện máy Astra" (hư cấu).
 
 Bảy hệ thống nguồn -> schema `raw` (dữ liệu bẩn đúng như khi ingest) + dữ liệu tham chiếu `ref` (seed):
   POS (cửa hàng)      raw.pos_don_hang, raw.pos_ct_don_hang
@@ -13,7 +13,7 @@ Bảy hệ thống nguồn -> schema `raw` (dữ liệu bẩn đúng như khi in
 Các "sự cố" được cài sẵn để agent / bộ kiểm định phát hiện:
   1. Trôi lệch đơn vị (unit drift): các cửa hàng TP.HCM nâng cấp POS v5 từ 15/08/2026 -> don_gia ghi theo NGHÌN đồng.
   2. Hết hàng (stockout): Điện thoại tại kho Đà Nẵng (Miền Trung) tháng 06/2026 -> doanh số Miền Trung giảm.
-  3. Đóng cửa hàng: ABC Hải An (Hải Phòng) đóng cửa 30/04/2026.
+  3. Đóng cửa hàng: Astra Hải An (Hải Phòng) đóng cửa 30/04/2026.
   4. Mã trạng thái bẩn ('COMPLETED ', 'canceled', 'Hoàn thành', 'pending_review' ...).
   5. Dòng trùng lặp (ingest replay) trong ecom_order_items, số lượng âm trong POS, giá nhập nhầm (x10).
   6. Khách hàng trùng SĐT, tỉnh/thành viết nhiều kiểu, đơn online tham chiếu KH chưa có trong CRM.
@@ -138,7 +138,7 @@ PRODUCT_SPEC = {
            ("Apple", "Tai nghe", ["AirPods 4", "AirPods Pro 3", "Sạc Apple 20W", "Apple Pencil Pro"], 0.55e6, 6.5e6),
            ("Samsung", "Tai nghe", ["Galaxy Buds3", "Galaxy Buds3 Pro", "Sạc Samsung 25W"], 0.4e6, 4.5e6),
            ("Xiaomi", "Tai nghe", ["Redmi Buds 6", "Xiaomi Buds 5"], 0.4e6, 2.5e6),
-           ("ABC Care", "Ốp lưng - Dán", ["Ốp lưng iPhone", "Ốp lưng Galaxy", "Dán cường lực", "Túi chống sốc laptop"],
+           ("Astra Care", "Ốp lưng - Dán", ["Ốp lưng iPhone", "Ốp lưng Galaxy", "Dán cường lực", "Túi chống sốc laptop"],
             0.08e6, 0.6e6)],
     "DHTM": [("Apple", "Apple Watch", ["Apple Watch SE 3", "Apple Watch Series 11", "Apple Watch Ultra 3"], 6e6, 22e6),
              ("Samsung", "Galaxy Watch", ["Galaxy Watch8", "Galaxy Watch8 Classic", "Galaxy Fit3"], 1.2e6, 10e6),
@@ -189,7 +189,7 @@ SUPPLIERS = [
 BRAND_SUPPLIER = {"Apple": "NCC01", "Samsung": "NCC02", "Xiaomi": "NCC03", "OPPO": "NCC04", "vivo": "NCC04",
                   "realme": "NCC04", "Dell": "NCC05", "HP": "NCC05", "Lenovo": "NCC05", "Asus": "NCC06",
                   "Acer": "NCC06", "Sony": "NCC07", "LG": "NCC08", "Anker": "NCC09", "Baseus": "NCC09",
-                  "Ugreen": "NCC09", "ABC Care": "NCC09", "Daikin": "NCC10", "Panasonic": "NCC10",
+                  "Ugreen": "NCC09", "Astra Care": "NCC09", "Daikin": "NCC10", "Panasonic": "NCC10",
                   "Sunhouse": "NCC11", "Kangaroo": "NCC11", "Philips": "NCC11", "Sharp": "NCC13",
                   "JBL": "NCC12", "Harman Kardon": "NCC12", "Marshall": "NCC12", "Garmin": "NCC12",
                   "Huawei": "NCC03", "TCL": "NCC03", "Casper": "NCC11", "Toshiba": "NCC13",
@@ -254,7 +254,7 @@ def build_ref(rng):
             mo = a[2] if len(a) > 2 and a[2] else f"20{rng.integers(17, 24)}-{rng.integers(1, 13):02d}-01"
             dong = a[3] if len(a) > 3 else None
             dt_m2 = {"Flagship": 900, "Tiêu chuẩn": 350, "Mini": 150}[loai] + int(rng.integers(-40, 60))
-            stores.append(dict(ma_ch=f"CH{i:03d}", ten_ch=f"ABC {area}", tinh_tp=prov, ma_vung=vung, loai_ch=loai,
+            stores.append(dict(ma_ch=f"CH{i:03d}", ten_ch=f"Astra {area}", tinh_tp=prov, ma_vung=vung, loai_ch=loai,
                                dien_tich_m2=dt_m2, ngay_khai_truong=mo, ngay_dong_cua=dong, ma_kho=kho))
             i += 1
     stores = pd.DataFrame(stores)
@@ -618,7 +618,7 @@ def generate(db_path: pathlib.Path, scale: float = 1.0, seed: int = 42, verbose:
     prov_raw = np.array([rng.choice(PROVINCE_ALIASES[p]) for p in cust_prov], dtype=object)
     prov_raw[rng.random(n_cust) < 0.01] = None
     emails = np.char.add(np.char.add("kh", np.arange(1, n_cust + 1).astype(str)),
-                         rng.choice(["@gmail.com", "@yahoo.com", "@outlook.com", "@abc.vn"], n_cust)).astype(object)
+                         rng.choice(["@gmail.com", "@yahoo.com", "@outlook.com", "@astra.vn"], n_cust)).astype(object)
     emails[rng.random(n_cust) < 0.2] = None
     raw_crm = pd.DataFrame({
         "ma_kh": cust_ids, "ho_ten": cust_names, "gioi_tinh": gender_raw,

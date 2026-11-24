@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Khởi chạy DATA-01 (Linux/macOS/Git Bash):  ./run.sh   |  REBUILD=1 SCALE=0.5 ./run.sh
-# Doanh nghiệp khác:  WORKSPACE=giaovan_xyz PORT=8001 ./run.sh      (bỏ WORKSPACE = doanh nghiệp mẫu ABC ở gốc dự án)
+# Doanh nghiệp khác:  WORKSPACE=giaovan_apex PORT=8001 ./run.sh      (bỏ WORKSPACE = doanh nghiệp mẫu Astra ở gốc dự án)
 set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONIOENCODING=utf-8
