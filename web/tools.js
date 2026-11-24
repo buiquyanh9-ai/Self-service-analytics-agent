@@ -1,4 +1,4 @@
-/* Trợ lý dữ liệu · các trang công cụ (mở từ mục "Công cụ" ở cột trái)
+/* Trợ lý dữ liệu · các trang công cụ (mở từ mục "Khám phá" ở cột trái)
  * Dữ liệu đầu vào, tự viết SQL, chỉ số & bảng, lịch sử câu hỏi; quản trị: chất lượng dữ liệu, nguồn gốc dữ liệu, đo độ chính xác, cài đặt.
  * Dùng chung tiện ích của app.js (h, api, S, dataTable, codeBlock, renderAnswer…). */
 "use strict";
@@ -47,9 +47,16 @@ function costView(c) {
 }
 function loading(text) { return h("div", { class: "thinking", style: { padding: "8px 0" } }, h("div", { class: "spinner" }), text); }
 function errNote(e) { return h("div", { class: "note bad" }, "⚠️", h("div", {}, e.message || String(e))); }
-function pageHead(title, sub) { return [h("h2", {}, title), sub ? h("p", { class: "sub" }, sub) : null]; }
+// tiêu đề trang theo kiểu "tool-heading" của giao diện Sola: dòng nhỏ (công cụ / quản trị · doanh nghiệp), tiêu đề lớn, mô tả
+function pageHead(title, sub) {
+  const pg = PAGES.find(p => p.id === S.page), p = S.cfg.profile || {};
+  const eyebrow = (pg && pg.admin ? "Quản trị" : "Công cụ") + " · " + (p.short_name || p.company || "");
+  return h("div", { class: "tool-heading" }, h("div", {},
+    h("div", { class: "welcome-overline" }, h("span", { class: "overline-line" }), eyebrow),
+    h("h1", {}, title), sub ? h("p", {}, sub) : null));
+}
 
-// Chi tiết kỹ thuật của một câu trả lời (dùng trong ngăn "Cách tính")
+// Chi tiết kỹ thuật của một câu trả lời (dùng trong hộp thoại "Cách tính")
 function techDetails(r) {
   const v = r.validation || {};
   return [
@@ -308,7 +315,7 @@ function pageLineage() {
     g.edges.forEach(e => {
       const a = pos[e.from], b = pos[e.to]; if (!a || !b) return;
       const p = document.createElementNS(NS, "path"), x1 = a.x + 200, y1 = a.y + 12, x2 = b.x, y2 = b.y + 12, mx = (x1 + x2) / 2;
-      p.setAttribute("d", `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`); p.setAttribute("fill", "none"); p.setAttribute("stroke", cssVar("--border-strong")); p.setAttribute("stroke-width", "1.2");
+      p.setAttribute("d", `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`); p.setAttribute("fill", "none"); p.setAttribute("class", "lin-edge");
       svg.append(p); paths.push({ e, p });
     });
     const inner = h("div", { style: { position: "relative", width: width + "px", height: height + "px" } }, svg);
@@ -318,10 +325,20 @@ function pageLineage() {
     const side = h("div", { class: "card", style: { marginTop: "14px" } }, h("div", { class: "muted" }, "Chọn một bảng ở sơ đồ."));
     fill(wrap, h("div", { class: "lineage" }, inner), side);
     const reach = (id, from, to) => { const s = new Set([id]); let ch = true; while (ch) { ch = false; g.edges.forEach(e => { if (s.has(e[to]) && !s.has(e[from])) { s.add(e[from]); ch = true; } }); } return s; };
+    let current = null;
     function select(id) {
+      if (id === current) {           // bấm lại bảng đang chọn: bỏ chọn, về dạng tổng quan
+        current = null;
+        Object.values(nodes).forEach(el => el.classList.remove("sel", "dim"));
+        paths.forEach(({ p }) => p.classList.remove("on", "off"));
+        fill(side, h("div", { class: "muted" }, "Chọn một bảng ở sơ đồ."));
+        return;
+      }
+      current = id;
       const rel = new Set([...reach(id, "from", "to"), ...reach(id, "to", "from")]);
       Object.entries(nodes).forEach(([k, el]) => { el.classList.toggle("sel", k === id); el.classList.toggle("dim", !rel.has(k)); });
-      paths.forEach(({ e, p }) => { const on = rel.has(e.from) && rel.has(e.to); p.setAttribute("stroke", on ? cssVar("--accent") : cssVar("--border-strong")); p.setAttribute("stroke-width", on ? "2" : "1.2"); });
+      // đường thuộc luồng của bảng đang chọn: nét liền đậm; còn lại: nét siêu mảnh, mờ
+      paths.forEach(({ e, p }) => { const on = rel.has(e.from) && rel.has(e.to); p.classList.toggle("on", on); p.classList.toggle("off", !on); if (on) svg.append(p); });
       const m = data.models[id];
       fill(side, h("b", { class: "mono" }, id), h("div", { class: "sec" }, (m && m.desc) || (g.nodes.find(n => n.id === id) || {}).desc || ""),
         m ? [h("div", { class: "muted small", style: { marginTop: "6px" } }, "Nguồn trực tiếp: " + m.sources.join(", ")),
@@ -337,8 +354,7 @@ function pageLineage() {
           r.downstream.length ? h("div", {}, h("b", {}, "Được dùng bởi: "), r.downstream.join(", ")) : null));
       } catch (e) { toast(e.message); }
     }
-    const fanIn = id => g.edges.filter(e => e.to === id).length;
-    select(([...cols[2]].sort((a, b) => fanIn(b.id) - fanIn(a.id))[0] || g.nodes[0]).id);
+    // mở trang: chưa chọn bảng nào, mọi đường nối ở dạng siêu mảnh; bấm một bảng thì luồng của nó hiện nét liền
   }).catch(e => fill(wrap, errNote(e)));
   return [pageHead("Nguồn gốc dữ liệu", "Mỗi bảng, mỗi cột được tạo ra từ nguồn nào (phân tích cú pháp SQL của các model). Chọn một bảng để xem cột; bấm một cột để lần ngược về dữ liệu gốc."), wrap];
 }
