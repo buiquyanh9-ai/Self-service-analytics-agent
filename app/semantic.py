@@ -449,20 +449,25 @@ class Semantic:
             for c in cte_cols[n]:
                 if c not in dims:
                     loc[c] = n
+
+        def ref(b):     # nhóm chỉ có ở một bảng sự kiện (cửa hàng có kế hoạch, chưa bán): chỉ số cộng dồn của bảng kia = 0
+            col = f"{loc[b]}.{b}"
+            additive = self.metrics.get(b, {}).get("additive", True)
+            return f"COALESCE({col}, 0)" if len(names) > 1 and dims and additive else col
         for m in metrics:
             md = self.metrics[m]
             if md.get("type") == "derived":
                 for b in self.base_metrics(m):
                     if b not in out_cols:
-                        sel.append(f"{loc[b]}.{b} AS {b}")
+                        sel.append(f"{ref(b)} AS {b}")
                         out_cols.append(b)
                 expr = md["expr"]
-                for ref in re.findall(r"\{(\w+)\}", expr):
-                    expr = expr.replace("{" + ref + "}", f"{loc[ref]}.{ref}")
+                for r_ in re.findall(r"\{(\w+)\}", expr):
+                    expr = expr.replace("{" + r_ + "}", ref(r_))
                 sel.append(f"{expr} AS {m}")
                 out_cols.append(m)
             elif m not in out_cols:
-                sel.append(f"{loc[m]}.{m} AS {m}")
+                sel.append(f"{ref(m)} AS {m}")
                 out_cols.append(m)
         sql = "WITH " + ",\n".join(ctes) + "\nSELECT " + ",\n       ".join(sel) + f"\nFROM {first}"
         for n in names[1:]:

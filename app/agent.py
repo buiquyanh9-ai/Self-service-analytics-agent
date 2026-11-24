@@ -925,6 +925,8 @@ class Agent:
         except SemanticError as e:
             s["status"], s["error"] = "error", str(e)
             return "finalize"
+        # giữ plan ĐÃ CHUẨN HÓA (vd order_by mô hình trả dạng object -> danh sách): các bước sau đọc plan theo đúng kiểu
+        s["plan"] = c.get("plan") or s["plan"]
         s["sql"], s["sql_source"], s["columns_meta"] = c["sql"], "semantic", c["columns"]
         s["notes"] += c["notes"]
         s["_detail"] = f"Biên dịch semantic plan → SQL (models: {', '.join(c['models'])})"
@@ -1051,6 +1053,11 @@ class Agent:
         meta = s.get("columns_meta")
         if not meta or [m["name"] for m in meta] != r["columns"]:
             meta = infer_meta(r["columns"], r["types"], r["rows"])
+            s["columns_meta"] = meta
+        if _is_listing(s.get("sql")):
+            # liệt kê từng đối tượng (không SUM/COUNT, không GROUP BY): cột số là thuộc tính (giá vốn của từng sản phẩm),
+            # không phải chỉ số kinh doanh -> không xếp hạng "dẫn đầu", không vẽ biểu đồ
+            meta = [dict(m, kind="dimension") if m.get("kind") == "metric" else m for m in meta]
             s["columns_meta"] = meta
         e = explain.explain(meta, r["columns"], r["rows"], s.get("plan") or {}, r["truncated"])
         s["facts"], s["template"], s["text"], s["highlights"] = e["facts"], e["template"], e["text"], e["highlights"]
@@ -1439,6 +1446,24 @@ def _cost_public(c):
 
 def _render(template: str, facts: dict) -> str:
     return re.sub(r"\{([a-z0-9_]+)\}", lambda m: facts[m.group(1)]["text"] if m.group(1) in facts else m.group(0), template)
+
+
+def _is_listing(sql: str | None) -> bool:
+    """SQL chỉ liệt kê dòng của bảng danh mục (không hàm tổng hợp, không GROUP BY, không hàm cửa sổ, chỉ đọc bảng chiều /
+    bảng tra cứu) — vd danh sách sản phẩm kèm giá. Bảng sự kiện đã tính sẵn (kế hoạch theo cửa hàng) không tính là liệt kê."""
+    if not sql:
+        return False
+    try:
+        import sqlglot
+        from sqlglot import exp
+        tree = sqlglot.parse_one(sql, read="duckdb")
+    except Exception:
+        return False
+    if tree.find(exp.AggFunc) or tree.find(exp.Group) or tree.find(exp.Window):
+        return False
+    lookup_tables = {e.table.split(".")[-1] for e in lookup.get_lookups().entities.values()}
+    tables = [t.name for t in tree.find_all(exp.Table)]
+    return bool(tables) and all(t.startswith("dim_") or t in lookup_tables for t in tables)
 
 
 def infer_meta(columns, types, rows) -> list[dict]:

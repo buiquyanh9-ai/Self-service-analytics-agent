@@ -200,7 +200,7 @@ class OfflineNLU:
             named = (hints.get("value_aliases") or {}).get(dim) or {}
             for v in self.sem.dim_values(dim):
                 forms = set() if dim in skip_bare else {norm(v)}
-                if fc:      # vd "ABC Cầu Giấy" -> "cầu giấy", "cửa hàng cầu giấy", "chi nhánh cầu giấy"
+                if fc:      # vd "Astra Cầu Giấy" -> "cầu giấy", "cửa hàng cầu giấy", "chi nhánh cầu giấy"
                     base = v
                     for pre in fc.get("strip") or []:
                         base = base.replace(pre, "")
@@ -488,6 +488,14 @@ class OfflineNLU:
         spans = self.parse_time(t, mask, bad_time)
         if bad_time:
             r.matched["invalid_time"] = bad_time
+        # "so sánh số đơn tháng 10 với tháng 9": hai kỳ nối bằng "với/và" sau chữ "so sánh" là so sánh kỳ, không phải
+        # một khoảng thời gian chia theo tháng
+        if cmp_pos is None and re.search(r"(?<![a-z0-9])(so sanh|doi chieu)(?![a-z0-9])", t):
+            sp = sorted(spans, key=lambda x: x.pos)
+            if len(sp) == 2:
+                mc = re.search(r"(?<![a-z0-9])(so voi|voi|va)(?![a-z0-9])", t[sp[0].pos:sp[1].pos])
+                if mc:
+                    cmp_pos = sp[0].pos + mc.start()
         cur = [s for s in spans if cmp_pos is None or s.pos < cmp_pos]
         if spans:
             r.matched["time"] = [s.label for s in spans]      # người dùng nêu rõ thời gian (không phải mặc định/kế thừa)
@@ -507,6 +515,26 @@ class OfflineNLU:
                 kw = next(self._find_all(t, "trung binh", mask), None) or next(self._find_all(t, "binh quan", mask), None)
                 if kw:
                     self._take(mask, kw.start(), kw.end())
+
+        # danh sách trong ngoặc ngay sau "theo <chiều>" ("theo loại cửa hàng (Flagship, Tiêu chuẩn, Mini)") chỉ liệt kê các
+        # nhóm sẽ thấy trong kết quả, không phải bộ lọc: giữ chỗ cả cụm, ghi lại các giá trị để quyết định sau khi biết chiều
+        enum_vals, enum_items = [], {}
+        for pg in re.finditer(r"\(([^()]{1,160})\)", question or ""):
+            before_n, inner = norm(question[:pg.start()]), norm(pg.group(1))
+            if not inner or not re.search(r"(?<![a-z0-9])(theo|tung|cac|moi)(?![a-z0-9])[a-z0-9 ]{1,40}$", before_n):
+                continue
+            items = [x for x in re.split(r"[,/;]|\s(?:và|hoặc|va|hoac)\s", pg.group(1)) if x.strip()]
+            if len(items) < 2:
+                continue
+            pos = t.find(inner, max(0, len(before_n) - 1))
+            if pos < 0:
+                continue
+            found = [(dim, val) for p, dim, val, _ in self.value_phr
+                     if re.search(r"(?<![a-z0-9])" + re.escape(p) + r"(?![a-z0-9])", inner)]
+            enum_vals += found
+            for dim, _ in found:
+                enum_items[dim] = len(items)
+            self._take(mask, pos, pos + len(inner))
 
         # chỉ số
         metrics, mpos = [], []
@@ -592,7 +620,10 @@ class OfflineNLU:
         dims: list[str] = []
         grain = None
         rank_time = False           # "tháng nào doanh thu cao nhất": xếp hạng các kỳ
-        not_time = r"(?! \d| thuong| trong tuan| le\b)"           # "ngày thường", "ngày trong tuần", "ngày lễ" không phải kỳ
+        # "ngày thường", "ngày trong tuần", "ngày lễ" không phải kỳ; "tính theo ngày khiếu nại / ngày tạo đơn" là chọn cột ngày
+        # để tính, không phải chia theo từng ngày
+        not_time = (r"(?! \d| thuong| trong tuan| le\b)(?! (khieu nai|tao|dat|giao|nhan|chot|tra|nhap|dang ky|mua|ban|phat"
+                    r"|gui|lap|xuat|hoan|thanh toan|ghi nhan)(?![a-z0-9]))")
         for gm in re.finditer(r"\b(theo|tung|moi|hang|cac|qua cac|tren tung|va) (ngay|tuan|thang|quy|nam)\b" + not_time, t):
             if mask[gm.start(2)]:
                 continue  # "mua hàng tháng này": "tháng này" là biểu thức thời gian
@@ -633,6 +664,22 @@ class OfflineNLU:
         for d2, f in filters.items():
             if f["op"] in ("in", "like") and len(f["values"]) >= 2 and d2 not in dims and d2 not in negated:
                 dims.append(d2)
+        # danh sách trong ngoặc: chỉ thành bộ lọc khi nhận ra đủ mọi mục đã liệt kê và đó chỉ là một phần các giá trị
+        for d2 in dict.fromkeys(d for d, _ in enum_vals):
+            vals = list(dict.fromkeys(v for d, v in enum_vals if d == d2))
+            allv = {str(v) for v in self.sem.dim_values(d2) or []}
+            if d2 in dims and d2 not in filters and len(vals) == enum_items.get(d2) and allv and set(map(str, vals)) < allv:
+                filters[d2] = {"dimension": d2, "op": "in", "values": vals}
+        # "top 3 tỉnh phát ..., cho xem tên tỉnh và tỷ lệ hoàn": chiều nhắc lại trong vế "cho xem" trỏ cùng cột với một chiều
+        # đã có -> chỉ là cột hiển thị, không thêm cách chia mới
+        om = re.search(r"(?<![a-z0-9])(cho (?:minh |toi |em )?xem|hien thi|kem theo|kem|gom co|gom|liet ke)(?![a-z0-9])", t)
+        if om and len(dims) > 1:
+            col = lambda d: (self.sem.dim_column(d) or (None, None))[1]
+            for d2 in list(dims):
+                ps = val_pos.get(d2) or []
+                if ps and min(ps) > om.start() and d2 not in filters and col(d2) \
+                        and any(o != d2 and col(o) == col(d2) for o in dims):
+                    dims.remove(d2)
 
         # top N / thứ tự
         limit, direction = None, None

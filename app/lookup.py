@@ -1,5 +1,5 @@
 """
-Tra cứu danh mục: thông tin của một đối tượng theo mã hoặc tên ("thông tin về SP0010", "CH036 ABC Phú Nhuận"),
+Tra cứu danh mục: thông tin của một đối tượng theo mã hoặc tên ("thông tin về SP0010", "CH036 Astra Phú Nhuận"),
 liệt kê ("những bưu cục nào đã đóng cửa", "danh sách cửa hàng ở Hà Nội"), đếm ("có bao nhiêu cửa hàng") và xếp theo một
 thuộc tính ("cửa hàng nào mới mở gần đây nhất").
 
@@ -223,12 +223,20 @@ class Lookups:
         if codes:
             e = codes[0][0]
             keys = list(dict.fromkeys(k for ent, k, _ in codes if ent is e))
-        else:       # tên đối tượng do bộ hiểu câu hỏi nhận ra; "nhân viên của ABC Phú Nhuận" thì tên cửa hàng chỉ là bộ lọc
+        else:       # tên đối tượng do bộ hiểu câu hỏi nhận ra; "nhân viên của Astra Phú Nhuận" thì tên cửa hàng chỉ là bộ lọc
             for f in plan.get("filters") or []:
                 ent = next((x for x in self.entities.values() if x.dimension == f["dimension"] and x.name_col), None)
                 if ent and f.get("op") != "not_in" and (typed is None or typed[0] is ent):
                     e, names = ent, [(f.get("op") or "in", v) for v in f["values"]]
                     break
+        frag = None
+        if not codes and not names and not plan.get("metrics") and not plan.get("time_range") and INFO_RE.search(t) \
+                and not SALES_RE.search(t):
+            # "thông tin về 17 Pro": một phần tên đối tượng (không có tên đầy đủ, không có mã) -> các đối tượng có tên chứa cụm đó
+            hit = self.name_fragment(t, typed[0] if typed else None)
+            if hit:
+                e, frag, matched = hit
+                names = [("in", n) for n in matched]
         if e is None and typed:
             e = typed[0]
         if e is None:
@@ -254,13 +262,40 @@ class Lookups:
                 mode = "list"
             else:
                 return None
-        spec = {"entity": e.id, "mode": mode, "keys": keys, "names": names, "states": [[p, pred, lab] for p, pred, lab in states],
+        spec = {"entity": e.id, "mode": mode, "keys": keys, "names": names, "fragment": frag,
+                "states": [[p, pred, lab] for p, pred, lab in states],
                 "filters": filters, "attr": attr, "order": None, "limit": None,
                 "time_ignored": bool(plan.get("time_range"))}
         if superl and attr and mode == "list":
             spec["order"] = [attr, superl]
             spec["limit"] = plan.get("limit") or (1 if re.search(r"\bnao\b", t) and not re.search(r"\b(nhung|cac)\b", t) else 10)
         return spec
+
+    FRAG_RE = re.compile(r"\b(?:thong tin|chi tiet|tra cuu|ho so)(?: (?:ve|cua|cho|san pham|mat hang|cua hang|chi nhanh))*"
+                         r" (.+?)(?: (?:la gi|nhu the nao|the nao|ra sao|duoc khong|nhe|nha|voi|a|di|giup minh|giup toi))*$")
+
+    def name_fragment(self, t: str, prefer: Entity | None = None, max_hits: int = 30):
+        """Cụm sau "thông tin về ..." là một phần tên của các đối tượng trong danh mục nhỏ (vd "17 pro" trong
+        "iPhone 17 Pro Max"). Trả về (đối tượng, cụm gốc, [tên đầy đủ khớp]) hoặc None."""
+        m = self.FRAG_RE.search(t)
+        if not m:
+            return None
+        frag = m.group(1).strip()
+        if prefer:          # bỏ chữ chỉ loại đối tượng ("sản phẩm iphone 17 pro" -> "iphone 17 pro")
+            for w in prefer.words:
+                frag = re.sub(r"^" + re.escape(w) + r"\s+", "", frag)
+        if len(frag) < 2 or not re.search(r"[a-z0-9]", frag) or frag in GENERIC_WORDS:
+            return None
+        pat = re.compile(r"(?<![a-z0-9])" + re.escape(frag) + r"(?![a-z0-9])")
+        best = None
+        for e in ([prefer] if prefer else []) + [x for x in self.entities.values() if x is not prefer]:
+            if not e.name_col:
+                continue
+            hits = list(dict.fromkeys(n for _, n in e.codes.values() if n and pat.search(norm(str(n)))))
+            if hits and len(hits) <= max_hits:
+                best = (e, frag, sorted(hits, key=lambda n: (len(str(n)), str(n))))
+                break
+        return best
 
     @staticmethod
     def _attr(e: Entity, t: str) -> str | None:
@@ -414,9 +449,27 @@ class Lookups:
             if n >= (spec.get("limit") or LIST_LIMIT) and not spec.get("limit"):
                 text = f"Danh sách {e.label}{cond} (đã cắt bớt, chỉ hiển thị phần đầu)."
             else:
-                text = f"Có **{fact('n', float(n), {'op': 'count', 'col': columns[0]}, fmt_int(n))}** {e.label}{cond}."
+                text = f"Có **{fact('n', float(n), {'op': 'count', 'col': columns[0]}, fmt_int(n))}** {e.label}{cond}"
+                frag = spec.get("fragment")
+                if frag:        # khớp theo một phần tên: nói rõ cụm đã dùng, kể tên các đối tượng tìm được
+                    shown = frag
+                    for nm0 in (r[ni] for r in rows if ni is not None):
+                        k = norm(str(nm0)).find(frag)
+                        if k >= 0 and len(norm(str(nm0))) == len(str(nm0)):
+                            shown = str(nm0)[k:k + len(frag)]
+                            break
+                    text += f" có tên chứa “{fact('frag', shown, {'op': 'context'})}”"
+                nci = ni if ni is not None else ki
+                if nci is not None and 1 < n <= 8:
+                    text += ": " + ", ".join(f"**{fact(f'nm{i}', disp[i][nci], {'op': 'label', 'row': i, 'col': columns[nci]})}**"
+                                             for i in range(n))
+                text += ". Bảng dưới có đủ thông tin từng " + e.label + "." if n > 1 else "."
+        fu = []
+        if spec.get("fragment") and ni is not None:         # hỏi tiếp số liệu bán của các đối tượng vừa tìm được
+            for nm0 in [rows[0][ni]] + ([rows[-1][ni]] if len(rows) > 1 else []):
+                fu += [x for x in self.follow_ups(e, nm0)[:1] if x not in fu]
         return {"text": text, "template": text, "facts": facts, "columns": columns, "rows": disp,
-                "meta": self._meta(columns, meta), "notes": notes, "follow_ups": []}
+                "meta": self._meta(columns, meta), "notes": notes, "follow_ups": fu}
 
     @staticmethod
     def _meta(columns, meta) -> list[dict]:
