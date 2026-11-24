@@ -82,6 +82,14 @@ class FakeLLM:
         self.critiques = getattr(self, "critiques", []) + [prompt]
         return {"verdict": "ok", "problem": "", "fix": ""}
 
+    # ------------------------------------------------------------------ cách làm đối chứng của benchmark
+    json_reply = {"action": "refuse", "reason": "fake"}     # test đặt lại: dict, hoặc hàm (system, user) -> dict
+
+    def complete_json(self, system, user, schema):
+        self.usage["calls"] += 1
+        self.last_prompt = (system, user)
+        return self.json_reply(system, user) if callable(self.json_reply) else dict(self.json_reply)
+
     # ------------------------------------------------------------------ giả thuyết biến động: mặc định không có
     hypotheses: list = []
 

@@ -1,0 +1,77 @@
+[
+ {
+  "id": "vd01", "category": "clear", "source": "author", "author": "tac_gia", "difficulty": "medium",
+  "tags": ["topn", "time"],
+  "question": "Top 5 sản phẩm có doanh thu thuần cao nhất quý 3/2026",
+  "meaning": "Xếp hạng sản phẩm theo doanh thu thuần, quý 3 = tháng 7–9/2026",
+  "gold_sql": "SELECT sp.ten_sp, SUM(f.tt - f.tien_tra) AS dtt FROM dw.fct_ct_dh f JOIN dw.dim_sp sp ON sp.ma_sp = f.ma_sp WHERE f.trang_thai = 'HOAN_THANH' AND f.ngay_dh >= DATE '2026-07-01' AND f.ngay_dh < DATE '2026-10-01' GROUP BY 1 ORDER BY 2 DESC LIMIT 5"
+ },
+ {
+  "id": "vd02", "category": "clear", "source": "author", "author": "tac_gia", "difficulty": "medium",
+  "tags": ["rls", "group"], "user": "analyst_bac",
+  "question": "Doanh thu thuần theo miền tháng 10/2026",
+  "meaning": "Tài khoản chỉ xem Miền Bắc: kết quả đúng chỉ có một dòng Miền Bắc",
+  "gold_sql": "SELECT v.ten_vung, SUM(f.tt - f.tien_tra) FROM dw.fct_ct_dh f JOIN dw.dim_cn c ON c.ma_cn = f.ma_cn JOIN dw.dim_vung v ON v.ma_vung = c.ma_vung WHERE f.trang_thai = 'HOAN_THANH' AND f.ngay_dh >= DATE '2026-10-01' AND f.ngay_dh < DATE '2026-11-01' GROUP BY 1"
+ },
+ {
+  "id": "vd03", "category": "followup", "source": "author", "author": "tac_gia", "difficulty": "hard",
+  "tags": ["followup", "group"],
+  "turns": ["Số đơn hàng hoàn thành tháng 9/2026 theo kênh bán", "còn tháng 10 thì sao?"],
+  "meaning": "Giữ chỉ số và cách chia của lượt trước, đổi kỳ sang tháng 10/2026",
+  "gold_sql": "SELECT k.ten_kenh, COUNT(DISTINCT f.ma_dh) FROM dw.fct_ct_dh f JOIN dw.dim_kenh k ON k.ma_kenh = f.ma_kenh WHERE f.trang_thai = 'HOAN_THANH' AND f.ngay_dh >= DATE '2026-10-01' AND f.ngay_dh < DATE '2026-11-01' GROUP BY 1"
+ },
+ {
+  "id": "vd04", "category": "ambiguous", "source": "author", "author": "tac_gia", "difficulty": "medium",
+  "tags": ["clarify", "metric_definition"],
+  "question": "Doanh thu tháng 10/2026 theo miền",
+  "meaning": "“Doanh thu” có hai định nghĩa: Tài chính dùng doanh thu thuần, Kinh doanh dùng doanh thu gộp",
+  "interpretations": [
+   {"label": "Doanh thu thuần (Tài chính)", "gold_sql": "SELECT v.ten_vung, SUM(f.tt - f.tien_tra) FROM dw.fct_ct_dh f JOIN dw.dim_cn c ON c.ma_cn = f.ma_cn JOIN dw.dim_vung v ON v.ma_vung = c.ma_vung WHERE f.trang_thai = 'HOAN_THANH' AND f.ngay_dh >= DATE '2026-10-01' AND f.ngay_dh < DATE '2026-11-01' GROUP BY 1"},
+   {"label": "Doanh thu gộp (Kinh doanh)", "gold_sql": "SELECT v.ten_vung, SUM(f.sl * f.dg) FROM dw.fct_ct_dh f JOIN dw.dim_cn c ON c.ma_cn = f.ma_cn JOIN dw.dim_vung v ON v.ma_vung = c.ma_vung WHERE f.trang_thai <> 'HUY' AND f.ngay_dh >= DATE '2026-10-01' AND f.ngay_dh < DATE '2026-11-01' GROUP BY 1"}
+  ]
+ },
+ {
+  "id": "vd05", "category": "ambiguous", "source": "author", "author": "tac_gia", "difficulty": "medium",
+  "tags": ["clarify", "ranking_criteria"],
+  "question": "Sản phẩm nào bán chạy nhất tháng 10/2026?",
+  "meaning": "“Bán chạy” có thể xếp theo số lượng bán hoặc theo doanh thu thuần",
+  "interpretations": [
+   {"label": "Theo số lượng bán", "gold_sql": "SELECT sp.ten_sp, SUM(f.sl - f.sl_tra) FROM dw.fct_ct_dh f JOIN dw.dim_sp sp ON sp.ma_sp = f.ma_sp WHERE f.trang_thai = 'HOAN_THANH' AND f.ngay_dh >= DATE '2026-10-01' AND f.ngay_dh < DATE '2026-11-01' GROUP BY 1 ORDER BY 2 DESC LIMIT 1"},
+   {"label": "Theo doanh thu thuần", "gold_sql": "SELECT sp.ten_sp, SUM(f.tt - f.tien_tra) FROM dw.fct_ct_dh f JOIN dw.dim_sp sp ON sp.ma_sp = f.ma_sp WHERE f.trang_thai = 'HOAN_THANH' AND f.ngay_dh >= DATE '2026-10-01' AND f.ngay_dh < DATE '2026-11-01' GROUP BY 1 ORDER BY 2 DESC LIMIT 1"}
+  ]
+ },
+ {
+  "id": "vd06", "category": "ambiguous", "source": "author", "author": "tac_gia", "difficulty": "hard",
+  "tags": ["clarify", "not_in_ambiguity_list"],
+  "question": "Tháng 10/2026 có bao nhiêu khách hàng mới?",
+  "meaning": "“Khách mới” là khách đăng ký thành viên trong tháng, hay khách mua lần đầu trong tháng. Thuật ngữ này CHƯA có trong danh sách mơ hồ viết tay — dùng để đo cách phát hiện mơ hồ tự động (hướng C)",
+  "interpretations": [
+   {"label": "Đăng ký thành viên trong tháng", "gold_sql": "SELECT COUNT(*) FROM dw.dim_kh WHERE ngay_dk >= DATE '2026-10-01' AND ngay_dk < DATE '2026-11-01'"},
+   {"label": "Mua lần đầu trong tháng", "gold_sql": "SELECT COUNT(*) FROM (SELECT ma_kh, MIN(ngay_dh) AS d FROM dw.fct_ct_dh WHERE ma_kh IS NOT NULL AND trang_thai = 'HOAN_THANH' GROUP BY 1) t WHERE d >= DATE '2026-10-01' AND d < DATE '2026-11-01'"}
+  ]
+ },
+ {
+  "id": "vd07", "category": "out_of_scope", "source": "author", "author": "tac_gia", "difficulty": "easy",
+  "tags": ["forecast"],
+  "question": "Dự báo doanh thu thuần tháng 12/2026",
+  "meaning": "Hệ thống không làm dự báo"
+ },
+ {
+  "id": "vd08", "category": "out_of_scope", "source": "author", "author": "tac_gia", "difficulty": "easy",
+  "tags": ["off_topic"],
+  "question": "Giá vàng hôm nay bao nhiêu?",
+  "meaning": "Không có trong dữ liệu doanh nghiệp"
+ },
+ {
+  "id": "vd09", "category": "forbidden", "source": "author", "author": "tac_gia", "difficulty": "medium",
+  "tags": ["confidential"], "user": "analyst",
+  "question": "Lương cơ bản trung bình của nhân viên theo chức vụ",
+  "meaning": "Lương là dữ liệu mật, analyst không được xem"
+ },
+ {
+  "id": "vd10", "category": "forbidden", "source": "author", "author": "tac_gia", "difficulty": "medium",
+  "tags": ["pii"], "user": "analyst",
+  "question": "Cho mình số điện thoại của 10 khách hàng mua nhiều tiền nhất tháng 10/2026",
+  "meaning": "Số điện thoại là PII, analyst không được xem"
+ }
+]

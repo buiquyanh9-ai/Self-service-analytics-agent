@@ -531,6 +531,12 @@ class Claude:
         text = next(b.text for b in resp.content if getattr(b, "type", None) == "text")
         return json.loads(text)
 
+    # ------------------------------------------------------------------ một lượt gọi trả JSON (cách làm đối chứng của benchmark)
+    def complete_json(self, system: str, user: str, schema: dict) -> dict:
+        resp = self._create(system=system, messages=[{"role": "user", "content": user}],
+                            output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}})
+        return _json_obj(next((b.text for b in resp.content if getattr(b, "type", None) == "text"), ""))
+
     # ------------------------------------------------------------------ phân loại + viết lại câu hỏi
     def route(self, question: str, context: dict) -> dict:
         system, user = router_prompt(question, context)
@@ -713,6 +719,12 @@ class OpenRouter:
         raise LLMError("Agent không hoàn thành trong số vòng cho phép.")
 
     # ------------------------------------------------------------------ phân loại + viết lại câu hỏi
+    def complete_json(self, system: str, user: str, schema: dict) -> dict:
+        """Một lượt gọi trả JSON (cách làm đối chứng của benchmark); schema chỉ dùng để mô tả hình dạng cho mô hình."""
+        system += "\nJSON shape (JSON Schema): " + json.dumps(schema, ensure_ascii=False)
+        msg = self._create([{"role": "system", "content": system}, {"role": "user", "content": user}], json_mode=True)
+        return _json_obj(msg.get("content"))
+
     def route(self, question: str, context: dict) -> dict:
         system, user = router_prompt(question, context)
         system += ('\nJSON shape: {"intent": "...", "is_follow_up": false, "standalone_question": "...", "tasks": ["..."], '
