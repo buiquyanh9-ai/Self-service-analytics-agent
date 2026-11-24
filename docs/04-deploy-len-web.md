@@ -44,7 +44,7 @@ Việc cần tự làm:
 Mỗi lần đẩy mã lên GitHub, workflow [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) tự chạy:
 
 1. Bộ kiểm thử tự động.
-2. `docker build`, rồi khởi động hai container (ABC và XYZ) với `PASSWORD_ADMIN` đặt riêng, và kiểm tra: `/api/health`
+2. `docker build`, rồi khởi động hai container (Astra và Apex) với `PASSWORD_ADMIN` đặt riêng, và kiểm tra: `/api/health`
    trả lời; tài khoản admin không lộ trên màn hình đăng nhập; mật khẩu admin mẫu bị từ chối; đăng nhập analyst hỏi
    một câu nhận được bảng kết quả qua kiểm chứng số liệu.
 
@@ -61,8 +61,8 @@ docker run --rm -p 8000:8000 -e APP_SECRET=mot-chuoi-ngau-nhien-dai -e PASSWORD_
 
 1. Vào <https://dashboard.render.com>, đăng nhập bằng tài khoản GitHub và cho Render quyền đọc repo (repo để private
    vẫn được).
-2. **New → Blueprint**, chọn repo. Render đọc `render.yaml` và hiện hai dịch vụ: `data01-dienmay-abc` và
-   `data01-giaovan-xyz`.
+2. **New → Blueprint**, chọn repo. Render đọc `render.yaml` và hiện hai dịch vụ: `data01-dienmay-astra` và
+   `data01-giaovan-apex`.
 3. Render hỏi giá trị các biến đánh dấu bí mật:
 
    | Biến | Điền gì |
@@ -105,7 +105,7 @@ Mọi dịch vụ chạy được Dockerfile đều dùng được. Container l�
 
 1. `/api/health` trả `"ok": true` và đúng tên doanh nghiệp.
 2. Màn hình đăng nhập **không** có nút tài khoản admin; đăng nhập `admin` / `admin123` bị từ chối.
-3. Đăng nhập analyst, hỏi một câu mẫu trên màn hình chào, có bảng và dấu ✓ xanh.
+3. Đăng nhập analyst, hỏi một câu mẫu trên màn hình chào Sola; kiểm tra tab **Bảng dữ liệu** và trạng thái **Đã đối chiếu … số liệu** bên dưới câu trả lời.
 4. Thanh trên hiện “Có mô hình ngôn ngữ” (hoặc “Chưa có mô hình ngôn ngữ” nếu không đặt khóa).
 5. Hỏi một câu tự do; không có cảnh báo vàng. Có cảnh báo nghĩa là khóa API hoặc tên mô hình sai.
 6. Xem số dư khóa API sau vài câu hỏi để biết mức tiêu thực tế.

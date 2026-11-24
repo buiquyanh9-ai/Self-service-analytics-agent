@@ -1,6 +1,9 @@
-# Tài liệu DATA-01
+# Tài liệu Sola · DATA-01
 
 Bộ tài liệu này dành cho người lần đầu tiếp xúc với hệ thống. Đọc theo thứ tự dưới đây, hoặc nhảy thẳng tới phần cần.
+
+Hướng dẫn giao diện theo Sola hiện tại: thanh bên **Khám phá**, kết quả có tab **Biểu đồ** / **Bảng dữ liệu**,
+hộp thoại **Cách tính** và **Xem SQL**, ngăn bên **Từ điển chỉ số**. Xem ảnh và thao tác trong [hướng dẫn sử dụng](02-huong-dan-su-dung.md).
 
 | Bạn muốn | Đọc | Thời gian |
 |---|---|---|

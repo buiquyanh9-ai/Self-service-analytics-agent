@@ -43,7 +43,8 @@ Không có khóa, trợ lý chỉ trả lời được câu hỏi nêu rõ chỉ
    | `OPENROUTER_API_KEY` | <https://openrouter.ai> → Keys | `openai/gpt-6-luna` (đổi bằng `OPENROUTER_MODEL`) |
    | `ANTHROPIC_API_KEY` | <https://console.anthropic.com> | `claude-opus-5-5` (đổi bằng `LLM_MODEL`) |
 
-3. Khởi động lại server. Thanh trên của giao diện hiện tên mô hình đang dùng.
+3. Khởi động lại server. Giao diện Sola hiện **Có mô hình ngôn ngữ** ở cuối thanh bên; di chuột lên trạng thái
+   **Nguồn dữ liệu sẵn sàng** trên thanh trên để xem tên mô hình. Admin có thể xem/đổi mô hình trong **Khám phá → Cài đặt**.
 
 File `.env` đã nằm trong `.gitignore`. **Không đưa khóa lên git, không dán khóa vào chỗ công khai.** Nên đặt hạn mức
 chi tiêu cho khóa ngay trên trang của nhà cung cấp.
@@ -56,7 +57,7 @@ Chi phí tham khảo: lượt đo 67 câu ngày 12/11/2026 tốn khoảng 0,02 U
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `WORKSPACE` | trống (doanh nghiệp ABC) | Tên thư mục trong `workspaces/` |
+| `WORKSPACE` | trống (doanh nghiệp Astra) | Tên thư mục trong `workspaces/` |
 | `LLM_MODE` | `auto` | `auto`, `openrouter`, `claude`. `auto`: OpenRouter nếu có khóa, kế đến Claude. Không còn `offline` |
 | `ROUTER_MODEL` | `anthropic/claude-haiku-5.5` | Model nhanh cho Router và lời diễn giải |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | trống, `openai/gpt-6-luna` | Gọi mô hình qua OpenRouter |
@@ -69,10 +70,10 @@ Chi phí tham khảo: lượt đo 67 câu ngày 12/11/2026 tốn khoảng 0,02 U
 ## 5. Chạy doanh nghiệp thứ hai
 
 ```powershell
-.\run.ps1 -Workspace giaovan_xyz -Port 8001
+.\run.ps1 -Workspace giaovan_apex -Port 8001
 ```
 
-Lần đầu lệnh này tự sinh dữ liệu của công ty giao vận. Mở <http://127.0.0.1:8001>. Có thể chạy song song với ABC ở
+Lần đầu lệnh này tự sinh dữ liệu của công ty giao vận. Mở <http://127.0.0.1:8001>. Có thể chạy song song với Astra ở
 cổng 8000 trong một cửa sổ khác.
 
 ## 6. Tùy chọn của `run.ps1`
@@ -84,7 +85,7 @@ cổng 8000 trong một cửa sổ khác.
 | `-Rebuild` | Xóa và sinh lại dữ liệu. Dùng khi dữ liệu hỏng hoặc sau khi thử chức năng sửa dữ liệu |
 | `-Scale 0.5` | Sinh dữ liệu nhỏ hơn (nhanh hơn, nhẹ hơn), dùng kèm `-Rebuild` |
 
-Với `run.sh`: `PORT=8001 WORKSPACE=giaovan_xyz REBUILD=1 SCALE=0.5 ./run.sh`.
+Với `run.sh`: `PORT=8001 WORKSPACE=giaovan_apex REBUILD=1 SCALE=0.5 ./run.sh`.
 
 ## 7. Kiểm thử
 
@@ -93,7 +94,7 @@ python -m pytest -q
 ```
 
 Kết quả mong đợi: `141 passed`, chạy khoảng nửa phút, không gọi mạng và không tốn tiền API. Cần đã có dữ liệu của cả
-hai doanh nghiệp (chạy `.\run.ps1` và `.\run.ps1 -Workspace giaovan_xyz` ít nhất một lần); thiếu dữ liệu của XYZ thì
+hai doanh nghiệp (chạy `.\run.ps1` và `.\run.ps1 -Workspace giaovan_apex` ít nhất một lần); thiếu dữ liệu của Apex thì
 các test về doanh nghiệp thứ hai bị bỏ qua và con số `passed` sẽ nhỏ hơn.
 
 Đo độ đúng trên bộ câu hỏi: đăng nhập `admin` → trang **Đo độ chính xác** → chạy. Ở chế độ LLM, lượt đo này có gọi

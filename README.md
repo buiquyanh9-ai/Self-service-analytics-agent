@@ -1,4 +1,4 @@
-# DATA-01 · AI Agent Text-to-SQL Self-Service Analytics
+# Sola · AI Agent Text-to-SQL Self-Service Analytics (DATA-01)
 
 Agent nhận câu hỏi **tiếng Việt**, tự lập kế hoạch truy vấn, sinh SQL đúng **semantic layer**, kiểm duyệt bằng code
 (cú pháp → chỉ đọc → RBAC/RLS → cột PII → dry-run → lint AST → ước lượng bytes quét), **hỏi lại khi mơ hồ**, cho người
@@ -19,12 +19,16 @@ cụ nhận kho dữ liệu mới (mục 2).
 
 ![Màn hình chào](docs/screenshots/welcome.png)
 
-Giao diện là một cột hỏi đáp. Màn hình chào nói trợ lý làm được gì kèm câu hỏi mẫu của chính doanh nghiệp; mỗi câu
-trả lời nhắc lại cách trợ lý hiểu câu hỏi (“Mình hiểu là”), vì sao con số đáng tin, và gợi ý câu hỏi tiếp theo. Nút
-**📐 Cách tính** mở ngăn bên với định nghĩa chỉ số, các bước kiểm tra, SQL, kế hoạch truy vấn, chi phí, nguồn gốc từng
-cột và các bước xử lý. Nút **Từ điển** ở thanh trên mở định nghĩa mọi chỉ số. Các trang công cụ (dữ liệu đầu vào, chỉ
-số & bảng, tự viết SQL, lịch sử câu hỏi; admin thêm chất lượng dữ liệu, nguồn gốc dữ liệu, đo độ chính xác, cài đặt)
-nằm ở mục **Công cụ** cột trái.
+Giao diện **Sola** mở đầu bằng “Hỏi dữ liệu. Hiểu doanh nghiệp.”, quả cầu dữ liệu tương tác và bốn thẻ câu hỏi:
+tra cứu số liệu, so sánh và xếp hạng, tìm nguyên nhân, hỏi định nghĩa. Nội dung mẫu thay đổi theo doanh nghiệp.
+Thanh bên có **Hội thoại mới**, **Gần đây** và **Khám phá** (từ điển chỉ số, dữ liệu đầu vào, chỉ số & bảng,
+tự viết SQL, lịch sử câu hỏi; admin thấy thêm chất lượng dữ liệu, nguồn gốc dữ liệu, đo độ chính xác, cài đặt).
+
+Mỗi câu trả lời hiển thị “Mình hiểu là” bằng các nhãn chỉ số, chiều, thời gian và bộ lọc; kết quả chuyển giữa tab
+**Biểu đồ** / **Bảng dữ liệu**, có nút tải CSV. Bên dưới có **Cách tính** (hộp thoại định nghĩa, kiểm tra, SQL và
+chi tiết kỹ thuật), **Xem SQL**, **Sao chép**, trạng thái **Đã đối chiếu … số liệu** và nút đánh giá kết quả.
+**Từ điển** ở thanh trên hoặc **Từ điển chỉ số** trong **Khám phá** mở ngăn bên tra định nghĩa.
+Ô hỏi ở dưới có nút **Chỉ số**; **Enter** gửi, **Shift + Enter** xuống dòng. Có chế độ sáng/tối và menu cho điện thoại.
 
 ![Câu trả lời](docs/screenshots/chat.png)
 
@@ -63,7 +67,12 @@ Khóa mô hình: chép `.env.example` thành `.env` ở gốc dự án rồi đi
 
 Không có khóa: chỉ trả lời được câu hỏi nêu rõ chỉ số và thời gian (đường nhanh); câu khác được báo là cần mô hình.
 
-Kiểm thử: `python -m pytest -q tests` (298 test: governance, chi phí, semantic, NLU, audit số liệu, so khớp eval, eval hội thoại, giả thuyết biến động, Router
+Xem dữ liệu ngoài bot: `python warehouse/view.py` mở cả kho trên trình duyệt bằng DuckDB UI (<http://localhost:4213>,
+chỉ đọc, chạy song song với bot được). Cần file rời thì `python warehouse/export.py` xuất mỗi bảng thành một file CSV trong `var/export/<schema>/`, kèm
+mục lục `var/export/DANH_SACH_BANG.md` mô tả bảng và cột (thêm `--rows 1000` để chỉ lấy 1000 dòng đầu mỗi bảng,
+`--workspace giaovan_apex` cho doanh nghiệp Apex). Đây là bản sao chỉ để xem; bot vẫn đọc `var/warehouse.duckdb`.
+
+Kiểm thử: `python -m pytest -q tests` (316 test: governance, chi phí, semantic, NLU, audit số liệu, so khớp eval, eval hội thoại, giả thuyết biến động, Router
 và đường nhanh, vòng lặp gọi tool của LLM, các chốt chặn quanh LLM, đa doanh nghiệp, công cụ nhận kho mới, phần phục vụ
 giao diện thân thiện). Không test nào gọi mạng: mọi mô hình được thay bằng client giả trong `tests/fake_llm.py`.
 
@@ -75,12 +84,12 @@ Mỗi tiến trình phục vụ một doanh nghiệp, chọn bằng biến môi 
 doanh nghiệp nằm ở hai thư mục khác nhau nên không lẫn vào nhau.
 
 ```powershell
-.\run.ps1                                   # doanh nghiệp mẫu 1: Công ty CP Bán lẻ Điện máy ABC (config/, var/, eval/)
-.\run.ps1 -Workspace giaovan_xyz -Port 8001 # doanh nghiệp mẫu 2: Công ty CP Giao vận XYZ (workspaces/giaovan_xyz/)
-# Linux/macOS/Git Bash: WORKSPACE=giaovan_xyz PORT=8001 ./run.sh
+.\run.ps1                                   # doanh nghiệp mẫu 1: Công ty CP Bán lẻ Điện máy Astra (config/, var/, eval/)
+.\run.ps1 -Workspace giaovan_apex -Port 8001 # doanh nghiệp mẫu 2: Công ty CP Giao vận Apex (workspaces/giaovan_apex/)
+# Linux/macOS/Git Bash: WORKSPACE=giaovan_apex PORT=8001 ./run.sh
 ```
 
-| | ABC (mặc định) | XYZ (`giaovan_xyz`) |
+| | Astra (mặc định) | Apex (`giaovan_apex`) |
 |---|---|---|
 | Ngành | bán lẻ điện máy | chuyển phát hàng hóa |
 | Schema, kiểu đặt tên | `dw`, cột viết tắt tiếng Việt (`fct_ct_dh.tt`) | `mart`, cột tiếng Anh (`fact_shipment.shipping_fee`) |
@@ -88,9 +97,9 @@ doanh nghiệp nằm ở hai thư mục khác nhau nên không lẫn vào nhau.
 | “Doanh thu” mơ hồ giữa | thuần (Tài chính) và gộp (Kinh doanh) | cước ghi nhận (Kế toán) và cước phát sinh (Kinh doanh) |
 | Thuật ngữ mơ hồ riêng | “bán chạy nhất” | “sản lượng” (số đơn hay số kg) |
 | Phân quyền theo dòng | theo vùng của cửa hàng/kho | theo miền của bưu cục gửi (`analyst_trung`) |
-| Bộ câu hỏi đánh giá | 41 câu (`eval/questions.json`) | 26 câu (`workspaces/giaovan_xyz/eval/questions.json`) |
+| Bộ câu hỏi đánh giá | 41 câu (`eval/questions.json`) | 26 câu (`workspaces/giaovan_apex/eval/questions.json`) |
 
-Hai doanh nghiệp chạy cùng một mã nguồn. Ngoài gói `retail_abc` nói ở cuối mục này, mã không nhắc tên bảng, tên cột
+Hai doanh nghiệp chạy cùng một mã nguồn. Ngoài gói `retail_astra` nói ở cuối mục này, mã không nhắc tên bảng, tên cột
 hay tên chỉ số của doanh nghiệp nào; những gì thuộc về doanh nghiệp nằm trong sáu file cấu hình:
 
 | File | Quyết định |
@@ -115,27 +124,28 @@ Việt, từ đồng nghĩa, bộ lọc trạng thái của chỉ số và thu�
 công cụ không ghi đè file đã rà soát; `--stats` chỉ tính lại thống kê khi dữ liệu đổi.
 
 Hai phần viết bằng code cho riêng bán lẻ (kiểm định nguồn POS/ERP và các nguyên nhân gốc như lệch đơn vị giá, hết hàng,
-lịch khuyến mãi) chỉ bật khi hồ sơ khai `domain_pack: retail_abc`. Doanh nghiệp khác dùng phần tổng quát: kiểm định độ
+lịch khuyến mãi) chỉ bật khi hồ sơ khai `domain_pack: retail_astra`. Doanh nghiệp khác dùng phần tổng quát: kiểm định độ
 tươi, khóa ngoại mồ côi theo các đường join đã khai báo, bất thường số dòng theo ngày, trôi lệch phân phối; phân tích
 biến động theo các chiều khai báo hoặc tự chọn.
 
 **Giới hạn hiện tại:** thời gian phải dùng năm chiều tên `ngay, tuan, thang, quy, nam`; kho phải là DuckDB; đổi doanh
 nghiệp là khởi động một tiến trình khác chứ chưa chuyển được ngay trên giao diện; phân tích biến động chưa chỉ ra thành
 phần gây biến động cho chỉ số dạng tỷ lệ; sơ đồ nguồn gốc dữ liệu chỉ có khi workspace tự khai báo các bước biến đổi
-(`warehouse/models.sql`), nên doanh nghiệp nhận một kho dựng sẵn như XYZ sẽ thấy trang đó trống kèm lời giải thích.
+(`warehouse/models.sql`), nên doanh nghiệp nhận một kho dựng sẵn như Apex sẽ thấy trang đó trống kèm lời giải thích.
 
 ---
 
 ## 3. Kịch bản demo (10 phút)
 
-Các trang công cụ nằm ở mục **Công cụ** cột trái; chi tiết kỹ thuật của mỗi câu trả lời nằm trong ngăn **📐 Cách tính**.
+Các trang công cụ nằm ở mục **Khám phá** cột trái; chi tiết kỹ thuật của mỗi câu trả lời nằm trong hộp thoại **Cách tính**.
 
 1. **analyst** → *“Doanh thu tháng trước theo miền”* → agent **hỏi lại** “doanh thu gộp hay thuần?” (2 phòng ban định
-   nghĩa khác nhau) → chọn *thuần* → bảng + biểu đồ + diễn giải; badge `✓ 9/9 số liệu khớp kết quả`.
-2. Bấm một gợi ý ở dòng **Hỏi tiếp** (*“Chia theo kênh bán”*, *“So với cùng kỳ năm trước”*) hoặc gõ *“còn Miền Nam thì
+   nghĩa khác nhau) → chọn *thuần* → bảng + biểu đồ + diễn giải; nhãn **Đã đối chiếu … số liệu**.
+2. Bấm một gợi ý ở dòng **Bạn có thể hỏi tiếp** (*“Chia theo kênh bán”*, *“So với cùng kỳ năm trước”*) hoặc gõ *“còn Miền Nam thì
    sao?”* → agent **nhớ ngữ cảnh** và lựa chọn định nghĩa.
-3. *“Doanh thu thuần theo cửa hàng”* (toàn bộ lịch sử, ~33 MB) → **chờ duyệt (HITL)**: xem/sửa SQL, bảng chi phí theo
-   bảng/cột/phân vùng → Đồng ý chạy. Ngăn *Cách tính* có các bước kiểm tra, chi phí quét, nguồn gốc cột, các bước xử lý, đối chiếu số liệu.
+3. *“Doanh thu thuần theo cửa hàng”* (toàn bộ lịch sử, ~33 MB) → **Chờ bạn duyệt (HITL)**: xem/sửa SQL, dung lượng
+   ước lượng và các bước kiểm tra → **Duyệt & chạy truy vấn** hoặc **Không chạy**. Sau khi có kết quả, mở **Cách tính**
+   để xem chi phí theo bảng/cột/phân vùng, nguồn gốc cột, các bước xử lý và đối chiếu số liệu.
 4. Đăng nhập **analyst_bac**, hỏi *“Doanh thu thuần theo miền tháng 10/2026”* → chỉ ra Miền Bắc (RLS tiêm vào AST).
 5. **Tự viết SQL**: chạy câu mẫu có cột sai `thanh_tien` → agent **tự sửa** thành `tt` (theo mô tả catalog), cảnh báo
    `YEAR(ngay_dh)` làm mất cắt phân vùng. Thử `DROP TABLE`, `SELECT * FROM dw.dim_kh`, `read_csv(...)` → bị chặn.
@@ -148,14 +158,51 @@ Các trang công cụ nằm ở mục **Công cụ** cột trái; chi tiết k�
 9. **Nguồn gốc dữ liệu**: sơ đồ raw → staging → dw; bấm cột `dw.fct_ct_dh.tt` để truy ngược tới `raw.pos_ct_don_hang.don_gia`...
 10. **Đo độ chính xác**: chạy bộ 41 câu → execution accuracy theo độ khó; **Tự học từ lỗi (train → dev)**.
 
+Ảnh chụp ngày 16/11/2026 trên giao diện hiện tại.
+
+**Hỏi lại khi “doanh thu” có hai định nghĩa** (bước 1) và **hộp thoại Cách tính** của một câu trả lời (7/7 bước kiểm tra,
+đối chiếu 9/9 số liệu, SQL đã chạy):
+
+![Hỏi lại khi câu hỏi mơ hồ](docs/screenshots/clarify.png)
+
+![Hộp thoại Cách tính](docs/screenshots/how.png)
+
+**Chờ duyệt SQL trước khi quét bảng lớn** (bước 3) và **phân quyền theo dòng** với tài khoản `analyst_bac` (bước 4):
+
+![Chờ duyệt HITL](docs/screenshots/hitl.png)
+
+![RLS: chỉ thấy Miền Bắc](docs/screenshots/rls.png)
+
+**Tự viết SQL** (bước 5): cột sai `thanh_tien` được sửa thành `tt`, cảnh báo `YEAR(ngay_dh)` làm mất cắt phân vùng:
+
+![Tự viết SQL](docs/screenshots/sql_console.png)
+
+**Phân tích nguyên nhân biến động** (bước 6): kiểm định KS phát hiện đơn giá bị ghi theo nghìn đồng; giả thuyết do mô
+hình nêu được code kiểm chứng (bác bỏ / xác nhận):
+
 ![Phân tích nguyên nhân biến động](docs/screenshots/variance.png)
 
-Doanh nghiệp thứ hai chạy cùng giao diện với nội dung của riêng mình (`.\run.ps1 -Workspace giaovan_xyz -Port 8001`):
+![Giả thuyết đã kiểm chứng](docs/screenshots/variance_hypotheses.png)
 
-![Màn hình chào của doanh nghiệp giao vận](docs/screenshots/welcome_xyz.png)
+**Các trang trong Khám phá**: chất lượng dữ liệu (bước 8), nguồn gốc dữ liệu (bước 9), lịch sử câu hỏi, đo độ chính xác (bước 10).
+Các trang dành riêng cho admin có biểu tượng khóa và tiêu đề nhóm “Quản trị”; lịch sử câu hỏi có cho mọi tài khoản:
 
-Ảnh khác trong `docs/screenshots/` (chụp ở giao diện trước, bố cục đã đổi): `sql_console.png`, `data_quality.png`,
-`lineage.png`, `mobile.png`, `variance_xyz.png`.
+![Chất lượng dữ liệu](docs/screenshots/data_quality.png)
+
+![Nguồn gốc dữ liệu](docs/screenshots/lineage.png)
+
+![Lịch sử câu hỏi](docs/screenshots/logs.png)
+
+![Đo độ chính xác](docs/screenshots/eval.png)
+
+Doanh nghiệp thứ hai chạy cùng giao diện với nội dung của riêng mình (`.\run.ps1 -Workspace giaovan_apex -Port 8001`):
+
+![Màn hình chào của doanh nghiệp giao vận](docs/screenshots/welcome_apex.png)
+
+![Câu trả lời của doanh nghiệp giao vận](docs/screenshots/chat_apex.png)
+
+Ảnh khác trong `docs/screenshots/`: `dictionary.png` (từ điển chỉ số), `dark.png` (chế độ tối), `mobile.png`
+(màn hình điện thoại). `expert.png` và `variance_apex.png` là ảnh của giao diện cũ, giữ lại để tham khảo.
 
 ---
 
@@ -239,28 +286,35 @@ Model (`warehouse/models.sql`) làm sạch thành 4 bảng staging và **18 bả
 số lượng âm, giá ×10; (6) khách trùng SĐT, đơn tham chiếu khách chưa có trong CRM; (7) schema drift `voucher_code`;
 (8) ngày cuối nạp thiếu ~60%. Quy mô chỉnh bằng `python warehouse/generate.py --scale 0.5`.
 
-Doanh nghiệp mẫu thứ hai có bộ sinh riêng, `workspaces/giaovan_xyz/warehouse/generate.py`: công ty chuyển phát hư cấu
+Doanh nghiệp mẫu thứ hai có bộ sinh riêng, `workspaces/giaovan_apex/warehouse/generate.py`: công ty chuyển phát hư cấu
 với 31 bưu cục, 4.000 khách hàng, khoảng 247 nghìn vận đơn từ 01/01/2025 đến 31/10/2026, 6 bảng trong schema `mart`.
 Ba sự kiện cài sẵn cho câu hỏi “vì sao”: mưa bão Miền Trung 10–25/06/2026 làm tỷ lệ giao đúng hạn giảm; khách hàng
 doanh nghiệp lớn nhất Miền Nam ngừng gửi từ 01/09/2026; một bưu cục đóng cửa ngày 01/04/2026. Kho này sạch (không có
-tầng raw/staging), nên phần kiểm định nguồn bẩn và quy tắc sửa chỉ minh họa được trên ABC.
+tầng raw/staging), nên phần kiểm định nguồn bẩn và quy tắc sửa chỉ minh họa được trên Astra.
 
 ---
 
 ## 6. Kết quả đo
+
+**Benchmark có nhãn loại câu (`python -m app.bench`).** Mỗi câu được gắn một trong 5 loại: rõ ràng, nối tiếp, mơ hồ
+cần hỏi lại, ngoài phạm vi, vượt quyền. Bộ chạy so sánh 5 cách làm, từ đưa schema thẳng cho LLM tới hệ thống đầy đủ,
+trên nhiều mô hình. Ngoài execution accuracy, nó còn đo tỷ lệ hỏi thừa, độ phủ và độ chính xác của việc hỏi lại,
+tỷ lệ đoán sai câu mơ hồ, và số câu rò rỉ dữ liệu ngoài quyền. Định dạng câu hỏi, mẫu CSV cho người viết câu hỏi và
+cách chạy: [eval/benchmark/README.md](eval/benchmark/README.md). Các bảng dưới đây là bộ eval cũ, chưa chạy lại theo
+benchmark mới.
 
 **Kiến trúc hiện tại (Router + đường nhanh + Planner, không còn offline), đo ngày 15/11/2026**, mỗi cấu hình một lượt.
 Router dùng `anthropic/claude-haiku-5.5`. Thời gian là thời gian chờ thực tế mỗi câu (chế độ eval không gọi lượt viết lời).
 
 | Doanh nghiệp | Cấu hình | Đúng | Đường đi (nhanh · LLM) | Trung vị | p90 | Chậm nhất |
 |---|---|---|---|---|---|---|
-| ABC (41 câu) | đường nhanh bật, Planner `gpt-6-luna` | 41/41 | 34 · 7 | 0,2 s | 6,6 s | 12,7 s |
-| XYZ (26 câu) | đường nhanh bật, Planner `gpt-6-luna` | 25/26 → 26/26 sau sửa* | 23 · 3 | 0,4 s | 2,2 s | 9,4 s |
-| ABC (41 câu) | tắt đường nhanh, Planner `gpt-6-luna` | 41/41 | 0 · 41 | 6,5 s | 10,4 s | 14,7 s |
-| ABC (41 câu) | tắt đường nhanh, Planner `claude-haiku-5.5` | 41/41 | 0 · 41 | 6,2 s | 8,8 s | 14,0 s |
+| Astra (41 câu) | đường nhanh bật, Planner `gpt-6-luna` | 41/41 | 34 · 7 | 0,2 s | 6,6 s | 12,7 s |
+| Apex (26 câu) | đường nhanh bật, Planner `gpt-6-luna` | 25/26 → 26/26 sau sửa* | 23 · 3 | 0,4 s | 2,2 s | 9,4 s |
+| Astra (41 câu) | tắt đường nhanh, Planner `gpt-6-luna` | 41/41 | 0 · 41 | 6,5 s | 10,4 s | 14,7 s |
+| Astra (41 câu) | tắt đường nhanh, Planner `claude-haiku-5.5` | 41/41 | 0 · 41 | 6,2 s | 8,8 s | 14,0 s |
 
 \* Câu sai: “Doanh thu tháng trước là bao nhiêu?” — Router tự chọn định nghĩa thay người dùng. Đã thêm chốt chặn bằng
-code (câu gốc có thuật ngữ mơ hồ thì luôn hỏi lại) và test hồi quy; câu này giờ được hỏi lại đúng. Lượt chạy lại cả bộ XYZ (có Critic): 26/26.
+code (câu gốc có thuật ngữ mơ hồ thì luôn hỏi lại) và test hồi quy; câu này giờ được hỏi lại đúng. Lượt chạy lại cả bộ Apex (có Critic): 26/26.
 
 **Eval hội thoại (20 kịch bản, 28 lượt) có mô hình chấm, đo ngày 15/11/2026** (`python -m app.conv_eval`; Planner
 `gpt-6-luna`, mô hình chấm `claude-haiku-5.5`). Lượt chạy đầu: 14/20 kịch bản đạt. Trong 6 kịch bản trượt có 3 lỗi
@@ -301,11 +355,11 @@ hiện tại; Planner `gpt-6-luna`, Critic bật):
 
 | Doanh nghiệp | Cấu hình | Đúng | Trung vị | p90 | Chậm nhất | Câu được LLM chấm |
 |---|---|---|---|---|---|---|
-| ABC (41 câu) | đường nhanh bật | 41/41 | 0,2 s | 5,2 s | 7,5 s | 4/6 câu đi qua Planner |
-| XYZ (26 câu) | đường nhanh bật | 26/26 | 0,3 s | 1,9 s | 6,5 s | 0/1 |
-| ABC (41 câu) | tắt đường nhanh | 41/41 | 5,4 s | 7,0 s | 14,5 s | 33/37 |
+| Astra (41 câu) | đường nhanh bật | 41/41 | 0,2 s | 5,2 s | 7,5 s | 4/6 câu đi qua Planner |
+| Apex (26 câu) | đường nhanh bật | 26/26 | 0,3 s | 1,9 s | 6,5 s | 0/1 |
+| Astra (41 câu) | tắt đường nhanh | 41/41 | 5,4 s | 7,0 s | 14,5 s | 33/37 |
 
-So với lượt đo trước khi có ba thay đổi này (ABC tắt đường nhanh: trung vị 6,5 s, p90 10,4 s): Planner thường chỉ còn
+So với lượt đo trước khi có ba thay đổi này (Astra tắt đường nhanh: trung vị 6,5 s, p90 10,4 s): Planner thường chỉ còn
 một lượt gọi (2,3–4,4 s), và Router (~1,5 s) chạy song song với Planner thay vì nối tiếp.
 
 11 kịch bản hội thoại chạy tay (câu 2–4 ý, câu nối tiếp 3 lượt, định nghĩa + số liệu, xếp hạng + “vì sao”, lạc đề
@@ -318,9 +372,9 @@ từ bộ nhớ đệm) nên giữ `gpt-6-luna`.
 
 | Doanh nghiệp | Cấu hình | Đúng | Trung vị | p90 | Chậm nhất | Critic |
 |---|---|---|---|---|---|---|
-| ABC (41 câu) | đường nhanh bật | 41/41 | 0,3 s | 8,4 s | 19,7 s | chấm 6 câu, đều “đúng” |
-| XYZ (26 câu) | đường nhanh bật | 26/26 | 0,4 s | 1,9 s | 9,7 s | 1 câu không kịp chấm |
-| ABC (41 câu) | tắt đường nhanh | 41/41 | 8,1 s | 10,8 s | 18,1 s | 37 câu không kịp chấm |
+| Astra (41 câu) | đường nhanh bật | 41/41 | 0,3 s | 8,4 s | 19,7 s | chấm 6 câu, đều “đúng” |
+| Apex (26 câu) | đường nhanh bật | 26/26 | 0,4 s | 1,9 s | 9,7 s | 1 câu không kịp chấm |
+| Astra (41 câu) | tắt đường nhanh | 41/41 | 8,1 s | 10,8 s | 18,1 s | 37 câu không kịp chấm |
 
 - Lượt đo đầu tiên của LLM chấm cho ra 2 lần “chưa đúng” với 2 câu thật ra đúng: chỉ số “số đơn hàng” đã lọc sẵn đơn
   hoàn thành; chiều “miền phát” của doanh nghiệp chuyển phát nghĩa là nơi giao tới. Đã sửa bằng cách đưa định nghĩa chỉ
@@ -339,12 +393,12 @@ Kết quả của kiến trúc cũ (có chế độ offline), đo 12/11/2026:
 
 | Doanh nghiệp | Chế độ | Đúng | Theo độ khó (easy · medium · hard · extra) | Giây/câu | Diễn giải qua audit số liệu |
 |---|---|---|---|---|---|
-| ABC (41 câu) | bộ luật offline | 36/41 | 100 · 100 · 100 · 28,6 % | 0,3 | 100 % |
-| ABC (41 câu) | OpenRouter `openai/gpt-4o-mini` | 38/41 | 100 · 100 · 100 · 57,1 % | 5,8 | 97,3 % |
-| ABC (41 câu) | OpenRouter `openai/gpt-6-luna` | 41/41 | 100 · 100 · 100 · 100 % | 6,8 | 100 % |
-| XYZ (26 câu) | bộ luật offline | 22/26 | 100 · 100 · 88,9 · 0 % | 0,04 | 100 % |
-| XYZ (26 câu) | OpenRouter `openai/gpt-4o-mini` | 25/26 | 100 · 100 · 100 · 66,7 % | 11,8 | 100 % |
-| XYZ (26 câu) | OpenRouter `openai/gpt-6-luna` | 26/26 | 100 · 100 · 100 · 100 % | 6,2 | 100 % |
+| Astra (41 câu) | bộ luật offline | 36/41 | 100 · 100 · 100 · 28,6 % | 0,3 | 100 % |
+| Astra (41 câu) | OpenRouter `openai/gpt-4o-mini` | 38/41 | 100 · 100 · 100 · 57,1 % | 5,8 | 97,3 % |
+| Astra (41 câu) | OpenRouter `openai/gpt-6-luna` | 41/41 | 100 · 100 · 100 · 100 % | 6,8 | 100 % |
+| Apex (26 câu) | bộ luật offline | 22/26 | 100 · 100 · 88,9 · 0 % | 0,04 | 100 % |
+| Apex (26 câu) | OpenRouter `openai/gpt-4o-mini` | 25/26 | 100 · 100 · 100 · 66,7 % | 11,8 | 100 % |
+| Apex (26 câu) | OpenRouter `openai/gpt-6-luna` | 26/26 | 100 · 100 · 100 · 100 % | 6,2 | 100 % |
 
 Cách đọc các con số này:
 
@@ -379,7 +433,7 @@ Tài liệu cho người mới (kỹ thuật, cách dùng, cách chạy, cách d
 
 ## 9. Khác biệt so với techstack gợi ý & hướng mở rộng
 
-- **Frontend** là HTML/JS thuần + Chart.js (giao diện test, không cần build) thay cho Next.js + Recharts; API đã tách
+- **Frontend Sola** là HTML/CSS/JS thuần + Chart.js (không cần build), có thanh bên thu gọn, sáng/tối và bố cục cho điện thoại, thay cho Next.js + Recharts; API đã tách
   sẵn để thay frontend.
 - **LangGraph** → đồ thị trạng thái tự viết cùng mô hình node/edge (không thêm phụ thuộc, trace từng node trên UI).
 - **Vector DB** → BM25 local; interface `search_schema/search_fewshots` thay được bằng Qdrant/pgvector.

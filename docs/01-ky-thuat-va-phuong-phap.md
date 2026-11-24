@@ -65,7 +65,7 @@ Câu hỏi tiếng Việt
 ```
 
 Toàn bộ luồng là một đồ thị trạng thái tự viết trong `app/agent.py` (mỗi bước là một nút, kết quả của nút quyết định
-nút tiếp theo). Giao diện hiện lại từng nút đã đi qua trong tab *Pipeline agent*.
+nút tiếp theo). Trên giao diện Sola, mở **Cách tính** → **Chi tiết kỹ thuật** → **Các bước xử lý** để xem từng nút đã đi qua và thời gian xử lý.
 
 ## 3. Các kỹ thuật, từng cái một
 
@@ -75,7 +75,7 @@ File `semantic_layer.yml` khai báo: các bảng và cách nối, các chiều, 
 chịu trách nhiệm). Kế hoạch truy vấn chỉ cần nói “chỉ số X, chia theo Y, tháng Z”; `app/semantic.py` biên dịch thành
 SQL. Nhờ vậy câu lệnh không phụ thuộc vào việc mô hình có nhớ đúng tên cột viết tắt hay không.
 
-Doanh nghiệp mẫu ABC có 25 chỉ số, 24 chiều, 7 model. Hỗ trợ chỉ số suy diễn (tỷ lệ), chỉ số lấy từ nhiều bảng sự
+Doanh nghiệp mẫu Astra có 25 chỉ số, 24 chiều, 7 model. Hỗ trợ chỉ số suy diễn (tỷ lệ), chỉ số lấy từ nhiều bảng sự
 kiện, so sánh kỳ, và chỉ số không cộng được qua thời gian (tồn kho).
 
 ### 3.2 Hai đường hiểu câu hỏi
@@ -161,7 +161,7 @@ Kết luận phân biệt *nguyên nhân kinh doanh* với *lỗi dữ liệu*.
 
 `app/dq.py` chạy các kiểm định: cấu trúc bảng đổi so với cam kết (data contract), dữ liệu chưa cập nhật, khóa ngoại
 không khớp, số dòng theo ngày bất thường, phân phối bị trôi lệch (PSI, chi-square), dòng trùng, giá trị ngoại lai.
-Với doanh nghiệp ABC, quản trị viên có thể áp dụng quy tắc sửa, dựng lại kho và hoàn tác.
+Với doanh nghiệp Astra, quản trị viên có thể áp dụng quy tắc sửa, dựng lại kho và hoàn tác.
 
 ### 3.10 Nhiều doanh nghiệp
 
@@ -197,9 +197,9 @@ DuckDB bất kỳ và sinh bản nháp sáu file này.
 | `app/evals.py`, `eval/questions.json` | Đo độ đúng từng câu (so kết quả chạy với SQL đáp án) |
 | `app/conv_eval.py`, `eval/conversations.json` | Eval hội thoại nhiều lượt: kiểm tra bằng code + mô hình chấm, so sánh bật/tắt tính năng |
 | `app/onboard.py` | Nhận kho dữ liệu mới |
-| `config/` | Cấu hình của doanh nghiệp mẫu ABC |
-| `workspaces/giaovan_xyz/` | Doanh nghiệp mẫu thứ hai |
-| `warehouse/` | Sinh dữ liệu giả và dựng kho của ABC |
+| `config/` | Cấu hình của doanh nghiệp mẫu Astra |
+| `workspaces/giaovan_apex/` | Doanh nghiệp mẫu thứ hai |
+| `warehouse/` | Sinh dữ liệu giả và dựng kho của Astra |
 | `web/` | Giao diện |
 | `tests/` | 298 kiểm thử tự động |
 | `var/` | Dữ liệu sinh ra khi chạy (không đưa lên git) |
@@ -213,8 +213,8 @@ Kết quả đo ngày 12/11/2026, mỗi cấu hình một lượt chạy:
 
 | Doanh nghiệp | Bộ luật offline | `gpt-4o-mini` | `gpt-6-luna` |
 |---|---|---|---|
-| ABC (41 câu) | 36/41 | 38/41 | 41/41 |
-| XYZ (26 câu) | 22/26 | 25/26 | 26/26 |
+| Astra (41 câu) | 36/41 | 38/41 | 41/41 |
+| Apex (26 câu) | 22/26 | 25/26 | 26/26 |
 
 Đo lại sau khi làm lại giao diện (cùng ngày) cho cùng số câu đúng ở bộ luật offline và `gpt-6-luna`.
 
